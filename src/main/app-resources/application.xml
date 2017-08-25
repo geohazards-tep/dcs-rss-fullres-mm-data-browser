@@ -1,0 +1,25 @@
+<?xml version="1.0" encoding="UTF-8"?>
+<application id="full_res_multi_mission_data_browser">
+  <jobTemplates>
+    <jobTemplate id="data_download_publish">
+      <streamingExecutable>/application/data_download_publish/run.sh</streamingExecutable>
+      <defaultParameters>
+      </defaultParameters>
+      <defaultJobconf>
+        <property id="ciop.job.max.tasks">1</property>
+        <property id="mapred.task.timeout">9900000000</property>
+      </defaultJobconf>
+    </jobTemplate>
+  </jobTemplates>
+  <workflow id="full-res-multi-mission-data-browser" title="Full resolution multi mission data browser" abstract="This service provides the possibility to browse the selected data at full resolution">
+    <workflowVersion>1.0</workflowVersion>
+    <node id="node_data_download_publish">
+      <job id="data_download_publish"/>
+      <sources>
+        <source id="data_reference" title="Data reference" abstract="Define the data product reference to be browsed in full resolution" scope="runtime" refid="string:list" maxOccurs="2"></source>
+      </sources>
+      <parameters/>
+    </node>
+  </workflow>
+</application>
+
