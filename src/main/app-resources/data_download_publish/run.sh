@@ -185,6 +185,11 @@ function check_product_type() {
 	prodTypeName="KanopusV"
   fi
 
+  # No support for Kompsat-5
+  if [[ "${mission}" == "Kompsat-5" ]]; then
+	return $ERR_WRONGPRODTYPE
+  fi
+
   echo ${prodTypeName}
   return 0
 }
@@ -487,26 +492,26 @@ function generate_full_res_tif (){
 		outputfile="${pleiades_product##*/}"; outputfile="${outputfile%.JP2}.tif"
 
 		#Select RGB bands and convert to GeoTiff
-		gdal_translate -of GTiff -co "COMPRESS=JPEG" -b 1 -b 2 -b 3 ${pleiades_product} temp-outputfile.tif
+		gdal_translate -of GTiff -b 3 -b 2 -b 1 -co "PHOTOMETRIC=RGB" -co "ALPHA=YES" ${pleiades_product} temp-outputfile.tif
 		returnCode=$?
 		[ $returnCode -eq 0 ] || return ${ERR_CONVERT}
 
-                gdalwarp -srcnodata 0 -dstnodata 0 -dstalpha -co "ALPHA=YES" -t_srs EPSG:3857 temp-outputfile.tif ${outputfile}
+                gdalwarp -t_srs EPSG:3857 -srcnodata 0 -dstnodata 0 -dstalpha -co "PHOTOMETRIC=RGB" -co "ALPHA=YES" temp-outputfile.tif ${outputfile}
                 returnCode=$?
                 [ $returnCode -eq 0 ] || return ${ERR_CONVERT}
                 rm -f temp-outputfile.tif
 
 		# !!! %%%TO-DO%%% verify if overviews are needed and eventually investigate correct options for Tif with JPEG compression 
                 #Add overviews
-                #gdaladdo -r average ${outputfile} 2 4 8 16
-                #returnCode=$?
-                #[ $returnCode -eq 0 ] || return ${ERR_CONVERT}
+                gdaladdo -r average ${outputfile} 2 4 8 16
+                returnCode=$?
+                [ $returnCode -eq 0 ] || return ${ERR_CONVERT}
 
                 mv ${outputfile} ${OUTPUTDIR}/
 
                 cd - 2>/dev/null
         else
-                ciop-log "ERROR" "The retrieved KOMPSAT-3 product is not a directory"
+                ciop-log "ERROR" "The retrieved Pleiades product is not a directory"
                 return ${ERR_GETDATA}
         fi
   fi
