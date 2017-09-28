@@ -163,6 +163,12 @@ function check_product_type() {
 
   fi
 
+  if [[ "${mission}" == "SPOT-6" ]] || [[ "${mission}" == "SPOT-7"  ]]; then
+        spot_xml=$(find ${retrievedProduct}/ -name 'DIM_SPOT?_MS_*.XML' | head -1 | sed 's|^.*\/||')
+	prodTypeName="${spot_xml:29:3}"
+        [[ "$prodTypeName" != "ORT" ]] && return $ERR_WRONGPRODTYPE
+  fi
+
   if [[ "${mission}" == "UK-DMC2" ]]; then
 	if [[ -d "${retrievedProduct}" ]]; then
 		prodTypeName=$(ls ${retrievedProduct} | sed -n -e 's|^.*_\(.*\)\.tif$|\1|p')
@@ -248,6 +254,12 @@ function mission_prod_retrieval(){
         alos2_test=$(echo "${prod_basename}" | grep "ALOS2")
         [[ -z "${alos2_test}" ]] && alos2_test=$(ls "${retrievedProduct}" | grep "ALOS2")
         [ "${alos2_test}" = "" ] || mission="Alos-2"
+	spot6_test=$(echo "${prod_basename}" | grep "SPOT6")
+        [[ -z "${spot6_test}" ]] && spot6_test=$(ls "${retrievedProduct}" | grep "SPOT6")
+        [ "${spot6_test}" = "" ] || mission="SPOT-6"
+	spot7_test=$(echo "${prod_basename}" | grep "SPOT7")
+        [[ -z "${spot7_test}" ]] && spot7_test=$(ls "${retrievedProduct}" | grep "SPOT7")
+        [ "${spot7_test}" = "" ] || mission="SPOT-7"
 	[ "${prod_basename_substr_3}" = "SO_" ] && mission="TerraSAR-X"
 	[ "${prod_basename_substr_4}" = "dims" ] && mission="TerraSAR-X"
         
@@ -515,6 +527,46 @@ function generate_full_res_tif (){
                 return ${ERR_GETDATA}
         fi
   fi
+
+  if [ ${mission} = "SPOT-6" ] || [ ${mission} = "SPOT-7" ]; then
+        ciop-log "INFO" "Creating full resolution tif for ${mission} product"
+        if [[ -d "${retrievedProduct}" ]]; then
+                cd ${retrievedProduct}
+
+                #Get image file
+		find ${retrievedProduct}/ -name 'IMG_SPOT?_MS_*.JP2' > list
+      		for jp2prod in $(cat list);
+      		do
+		    # check if searched product exists 
+                    [[ -z "$jp2prod" ]] && return ${ERR_CONVERT}
+                    #set output filename
+                    outputfile="${jp2prod##*/}"; outputfile="${outputfile%.JP2}.tif"
+
+                    #Select RGB bands and convert to GeoTiff
+                    gdal_translate -of GTiff -b 3 -b 2 -b 1 -co "PHOTOMETRIC=RGB" -co "ALPHA=YES" ${jp2prod} temp-outputfile.tif
+                    returnCode=$?
+                    [ $returnCode -eq 0 ] || return ${ERR_CONVERT}
+
+                    gdalwarp -t_srs EPSG:3857 -srcnodata 0 -dstnodata 0 -dstalpha -co "PHOTOMETRIC=RGB" -co "ALPHA=YES" temp-outputfile.tif ${outputfile}
+                    returnCode=$?
+                    [ $returnCode -eq 0 ] || return ${ERR_CONVERT}
+                    rm -f temp-outputfile.tif
+
+                    #Add overviews
+                    gdaladdo -r average ${outputfile} 2 4 8 16
+                    returnCode=$?
+                    [ $returnCode -eq 0 ] || return ${ERR_CONVERT}
+
+                    mv ${outputfile} ${OUTPUTDIR}/
+		done 
+
+                cd - 2>/dev/null
+        else
+                ciop-log "ERROR" "The retrieved ${mission} product is not a directory"
+                return ${ERR_GETDATA}
+        fi
+  fi
+
 
   if [[ "${mission}" == "Alos-2" ]]; then
 	ciop-log "INFO" "Creating full resolution tif for ALOS-2 product"
