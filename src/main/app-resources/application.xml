@@ -16,7 +16,7 @@
     <node id="node_data_download_publish">
       <job id="data_download_publish"/>
       <sources>
-        <source id="data_reference" title="Data reference" abstract="Define the data product reference to be browsed in full resolution" scope="runtime" refid="string:list" maxOccurs="2"></source>
+        <source id="data_reference" title="Data reference" abstract="Define the data product reference to be browsed in full resolution" scope="runtime" refid="string:list" ></source>
       </sources>
       <parameters/>
     </node>
