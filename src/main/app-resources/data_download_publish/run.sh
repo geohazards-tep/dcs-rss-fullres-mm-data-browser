@@ -59,7 +59,8 @@ trap cleanExit EXIT
 # function that checks the product type from the product name
 function check_product_type() {
   
-  local productName=$1
+  local retrievedProduct=$1
+  local productName=$( basename "$retrievedProduct" )
   local mission=$2
 
   if [ ${mission} = "Sentinel-1"  ] ; then
@@ -187,8 +188,8 @@ function check_product_type() {
   fi
 
   if [[ "${mission}" == "Kanopus-V" ]]; then
-	### !!! TO-DO: update once reference Kanopus-V info, doc and samples are provided !!! ###
-	prodTypeName="KanopusV"
+	prodTypeName=${prodname:10:3}
+	[[ "$prodTypeName" != "MSS" ]] && return $ERR_WRONGPRODTYPE
   fi
 
   # No support for Kompsat-5
@@ -231,11 +232,13 @@ function get_data() {
 # function that retrieves the mission data identifier from the product name 
 function mission_prod_retrieval(){
 	local mission=""
-        prod_basename=$1
+        local retrievedProduct=$1
+        local prod_basename=$( basename "$retrievedProduct" )
 
         prod_basename_substr_3=${prod_basename:0:3}
         prod_basename_substr_4=${prod_basename:0:4}
         prod_basename_substr_5=${prod_basename:0:5}
+	prod_basename_substr_9=${prod_basename:0:9}
         [ "${prod_basename_substr_3}" = "S1A" ] && mission="Sentinel-1"
         [ "${prod_basename_substr_3}" = "S1B" ] && mission="Sentinel-1"
         [ "${prod_basename_substr_3}" = "S2A" ] && mission="Sentinel-2"
@@ -250,7 +253,7 @@ function mission_prod_retrieval(){
         [ "${prod_basename_substr_5}" = "U2007" ] && mission="UK-DMC2"
 	[ "${prod_basename_substr_5}" = "ORTHO" ] && mission="UK-DMC2"
         [ "${prod_basename}" = "Resurs-P" ] && mission="Resurs-P"
-        [ "${prod_basename}" = "Kanopus-V" ] && mission="Kanopus-V"
+        [ "${prod_basename_substr_9}" = "KANOPUS_V" ] && mission="Kanopus-V"
         alos2_test=$(echo "${prod_basename}" | grep "ALOS2")
         [[ -z "${alos2_test}" ]] && alos2_test=$(ls "${retrievedProduct}" | grep "ALOS2")
         [ "${alos2_test}" = "" ] || mission="Alos-2"
@@ -273,9 +276,10 @@ function mission_prod_retrieval(){
 
 # function that generate the full res geotiff image from the original data product
 function generate_full_res_tif (){
-# function call generate_full_res_tif "${prodname}" "${mission}"
-
-  local productName=$1
+# function call generate_full_res_tif "${retrievedProduct}" "${mission}
+  
+  local retrievedProduct=$1
+  local productName=$( basename "$retrievedProduct" )
   local mission=$2
 
   #Setup GDAL variables
@@ -733,11 +737,6 @@ function main() {
             cat ${TMPDIR}/ciop_copy.stderr
             return $ERR_NORETRIEVEDPROD
     	fi
-#	if [[ -d "$retrievedProduct" ]]; then 
-#		unzippedFolder=$(ls $retrievedProduct)	
-		# retrieved product pointing to the unzipped folder
-#        	retrievedProduct=$retrievedProduct/$unzippedFolder
-#	fi
     	prodname=$( basename "$retrievedProduct" )
 	# report activity in the log
     	ciop-log "INFO" "Product correctly retrieved: ${prodname}"
@@ -746,7 +745,7 @@ function main() {
 
 	# report activity in the log
         ciop-log "INFO" "Retrieving mission identifier from product name"
-	mission=$( mission_prod_retrieval "${prodname}")
+	mission=$( mission_prod_retrieval "${retrievedProduct}")
         [ $? -eq 0 ] || return ${ERR_GETMISSION}
         # log the value, it helps debugging.
         # the log entry is available in the process stderr
@@ -757,7 +756,7 @@ function main() {
 	# report activity in the log
         ciop-log "INFO" "Checking product type from product name"
         #get product type from product name
-        prodType=$( check_product_type "${prodname}" "${mission}" )
+        prodType=$( check_product_type "${retrievedProduct}" "${mission}" )
         returnCode=$?
 	[ $returnCode -eq 0 ] || return $returnCode
         # log the value, it helps debugging.
@@ -768,7 +767,7 @@ function main() {
 	
 	# report activity in the log
         ciop-log "INFO" "Creating full resolution tif product(s) for ${prodname}"
-	generate_full_res_tif "${prodname}" "${mission}"
+	generate_full_res_tif "${retrievedProduct}" "${mission}"
 	returnCode=$?
         [ $returnCode -eq 0 ] || return $returnCode
         # Publish results 
