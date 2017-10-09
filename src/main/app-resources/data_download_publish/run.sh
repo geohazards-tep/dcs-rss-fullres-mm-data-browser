@@ -282,23 +282,23 @@ function generate_full_res_tif (){
   local productName=$( basename "$retrievedProduct" )
   local mission=$2
 
-  #Setup GDAL variables
-  #GDAL_CONF_FILE="/application/gdal/conf_gdal_env.sh"
-  #[[ -s "$GDAL_CONF_FILE" ]] || return ${ERR_GDAL_CONF} 
-  #. $GDAL_CONF_FILE
-
   if [ ${mission} = "Sentinel-1"  ] ; then
 
     if [[ -d "${retrievedProduct}" ]]; then
       # loop on tiff products contained in the "measuremen" folder to reproject prior publishing
-#      ls ${retrievedProduct}/measurement/*.tiff > list
       find ${retrievedProduct}/ -name '*.tiff' > list
       for tifProd in $(cat list);
       do
           basename_tiff=$( basename $tifProd )
-          gdalwarp -srcnodata 0 -dstnodata 0 -dstalpha -co "ALPHA=YES" -t_srs "EPSG:3857" -multi -of GTiff "${tifProd}" ${TMPDIR}/${basename_tiff}
+          
+	  gdal_translate -scale -ot Byte -co "TILED=YES" -co "BLOCKXSIZE=512" -co "BLOCKYSIZE=512" -co "ALPHA=YES" "${tifProd}" temp-outputfile.tif
+	  returnCode=$?
+          [ $returnCode -eq 0 ] || return ${ERR_CONVERT}
+	
+	  gdalwarp -ot Byte -srcnodata 0 -dstnodata 0 -dstalpha -co "TILED=YES" -co "BLOCKXSIZE=512" -co "BLOCKYSIZE=512" -co "ALPHA=YES" -t_srs EPSG:3857 temp-outputfile.tif ${TMPDIR}/${basename_tiff}
 	  returnCode=$?
 	  [ $returnCode -eq 0 ] || return ${ERR_CONVERT}
+	  rm -f temp-outputfile.tif
 
           #Add overviews
           gdaladdo -r average ${TMPDIR}/${basename_tiff} 2 4 8 16
@@ -333,7 +333,6 @@ function generate_full_res_tif (){
           #if it is neither like MTD_*.xml: return error
           [ $? -ne 0 ] && return $ERR_GETPRODMTD
       fi
-
       # create full resolution tif image with Red=B4 Green=B3 Blue=B2
       pconvert -b 4,3,2 -f tif -o ${OUTPUTDIR} ${s2_xml} &> /dev/null
       # check the exit code
@@ -342,11 +341,15 @@ function generate_full_res_tif (){
       outputfile=$(ls ${OUTPUTDIR} | egrep '^.*.tif$')
       tmp_outputfile="tmp_${outputfile}"
       mv ${OUTPUTDIR}/$outputfile ${OUTPUTDIR}/$tmp_outputfile
-
-      # gdalwarp -srcnodata 0 -dstnodata 0 -dstalpha -co "PHOTOMETRIC=RGB" -co "ALPHA=YES" -t_srs EPSG:3857 ${OUTPUTDIR}/$tmp_outputfile ${OUTPUTDIR}/$outputfile
-      gdalwarp -t_srs EPSG:3857 ${OUTPUTDIR}/$tmp_outputfile ${OUTPUTDIR}/$outputfile
+      gdal_translate -ot Byte -of GTiff -b 1 -b 2 -b 3 -scale -co "TILED=YES" -co "BLOCKXSIZE=512" -co "BLOCKYSIZE=512" -co "PHOTOMETRIC=RGB" -co "ALPHA=YES" ${OUTPUTDIR}/$tmp_outputfile temp-outputfile.tif
       returnCode=$?
       [ $returnCode -eq 0 ] || return ${ERR_CONVERT}
+
+      gdalwarp -ot Byte -t_srs EPSG:3857 -srcnodata 0 -dstnodata 0 -dstalpha -co "TILED=YES" -co "BLOCKXSIZE=512" -co "BLOCKYSIZE=512" -co "PHOTOMETRIC=RGB" -co "ALPHA=YES" temp-outputfile.tif ${OUTPUTDIR}/$outputfile
+      returnCode=$?
+      [ $returnCode -eq 0 ] || return ${ERR_CONVERT}
+      rm -f temp-outputfile.tif
+
       #Remove temporary file
       rm -f ${OUTPUTDIR}/$tmp_outputfile
       rm -f ${OUTPUTDIR}/*.xml
@@ -390,10 +393,15 @@ function generate_full_res_tif (){
 
 		ciop-log "INFO" "Apply reprojection and set alpha band"
 		cd ${retrievedProduct%/*}/temp
-		gdalwarp -srcnodata 0 -dstnodata 0 -dstalpha -co "PHOTOMETRIC=RGB" -co "ALPHA=YES" -co "COMPRESS=DEFLATE" -t_srs EPSG:3857 temp-rgb-outputfile.tif ${outputfile}
+		gdal_translate -ot Byte -of GTiff -b 1 -b 2 -b 3 -scale -co "TILED=YES" -co "BLOCKXSIZE=512" -co "BLOCKYSIZE=512" -co "PHOTOMETRIC=RGB" -co "ALPHA=YES" temp-rgb-outputfile.tif temp-outputfile.tif
+                returnCode=$?
+                [ $returnCode -eq 0 ] || return ${ERR_CONVERT}
+
+		gdalwarp -ot Byte -t_srs EPSG:3857 -srcnodata 0 -dstnodata 0 -dstalpha -co "TILED=YES" -co "BLOCKXSIZE=512" -co "BLOCKYSIZE=512" -co "PHOTOMETRIC=RGB" -co "ALPHA=YES" temp-outputfile.tif ${outputfile}
 		returnCode=$?
 		[ $returnCode -eq 0 ] || return ${ERR_CONVERT}		
-
+		# Remove temp files
+		rm -f temp-outputfile.tif
 		rm -f temp-rgb-outputfile.tif
 
 		#Add overviews
@@ -434,11 +442,18 @@ function generate_full_res_tif (){
 
 		cd - 2>/dev/null
 
+		ciop-log "INFO" "Apply reprojection and set alpha band"
 		cd ${retrievedProduct}/temp
-		gdalwarp -srcnodata 0 -dstnodata 0 -dstalpha -co "PHOTOMETRIC=RGB" -co "ALPHA=YES" -co "COMPRESS=DEFLATE" -t_srs EPSG:3857 temp-outputfile.tif ${outputfile}
+
+		gdal_translate -ot Byte -of GTiff -b 1 -b 2 -b 3 -scale -co "TILED=YES" -co "BLOCKXSIZE=512" -co "BLOCKYSIZE=512" -co "PHOTOMETRIC=RGB" -co "ALPHA=YES" temp-outputfile.tif temp-outputfile2.tif
+		returnCode=$?
+                [ $returnCode -eq 0 ] || return ${ERR_CONVERT}
+
+		gdalwarp -ot Byte -t_srs EPSG:3857 -srcnodata 0 -dstnodata 0 -dstalpha -co "TILED=YES" -co "BLOCKXSIZE=512" -co "BLOCKYSIZE=512" -co "PHOTOMETRIC=RGB" -co "ALPHA=YES" temp-outputfile2.tif ${outputfile}
 		returnCode=$?
 		[ $returnCode -eq 0 ] || return ${ERR_CONVERT}
 		rm -f temp-outputfile.tif 
+		rm -f temp-outputfile2.tif
 
 		#Add overviews
 		gdaladdo -r average ${outputfile} 2 4 8 16
@@ -476,10 +491,16 @@ function generate_full_res_tif (){
                 cd - 2>/dev/null
 
                 cd ${retrievedProduct}/temp
-                gdalwarp -srcnodata 0 -dstnodata 0 -dstalpha -co "PHOTOMETRIC=RGB" -co "ALPHA=YES" -co "COMPRESS=DEFLATE" -t_srs EPSG:3857 temp-outputfile.tif ${outputfile}
+                
+		gdal_translate -ot Byte -of GTiff -b 1 -b 2 -b 3 -scale -co "TILED=YES" -co "BLOCKXSIZE=512" -co "BLOCKYSIZE=512" -co "PHOTOMETRIC=RGB" -co "ALPHA=YES" temp-outputfile.tif temp-outputfile2.tif
+                returnCode=$?
+                [ $returnCode -eq 0 ] || return ${ERR_CONVERT}
+
+                gdalwarp -ot Byte -t_srs EPSG:3857 -srcnodata 0 -dstnodata 0 -dstalpha -co "TILED=YES" -co "BLOCKXSIZE=512" -co "BLOCKYSIZE=512" -co "PHOTOMETRIC=RGB" -co "ALPHA=YES" temp-outputfile2.tif ${outputfile}
                 returnCode=$?
                 [ $returnCode -eq 0 ] || return ${ERR_CONVERT}
                 rm -f temp-outputfile.tif
+                rm -f temp-outputfile2.tif
 
                 #Add overviews
                 gdaladdo -r average ${outputfile} 2 4 8 16
@@ -508,16 +529,15 @@ function generate_full_res_tif (){
 		outputfile="${pleiades_product##*/}"; outputfile="${outputfile%.JP2}.tif"
 
 		#Select RGB bands and convert to GeoTiff
-		gdal_translate -of GTiff -b 3 -b 2 -b 1 -co "PHOTOMETRIC=RGB" -co "ALPHA=YES" ${pleiades_product} temp-outputfile.tif
+		gdal_translate -ot Byte -of GTiff -b 3 -b 2 -b 1 -scale -co "TILED=YES" -co "BLOCKXSIZE=512" -co "BLOCKYSIZE=512" -co "PHOTOMETRIC=RGB" -co "ALPHA=YES" ${pleiades_product} temp-outputfile.tif
 		returnCode=$?
 		[ $returnCode -eq 0 ] || return ${ERR_CONVERT}
 
-                gdalwarp -t_srs EPSG:3857 -srcnodata 0 -dstnodata 0 -dstalpha -co "PHOTOMETRIC=RGB" -co "ALPHA=YES" temp-outputfile.tif ${outputfile}
+		gdalwarp -ot Byte -t_srs EPSG:3857 -srcnodata 0 -dstnodata 0 -dstalpha -co "TILED=YES" -co "BLOCKXSIZE=512" -co "BLOCKYSIZE=512" -co "PHOTOMETRIC=RGB" -co "ALPHA=YES" temp-outputfile.tif ${outputfile} 
                 returnCode=$?
                 [ $returnCode -eq 0 ] || return ${ERR_CONVERT}
                 rm -f temp-outputfile.tif
 
-		# !!! %%%TO-DO%%% verify if overviews are needed and eventually investigate correct options for Tif with JPEG compression 
                 #Add overviews
                 gdaladdo -r average ${outputfile} 2 4 8 16
                 returnCode=$?
@@ -547,11 +567,11 @@ function generate_full_res_tif (){
                     outputfile="${jp2prod##*/}"; outputfile="${outputfile%.JP2}.tif"
 
                     #Select RGB bands and convert to GeoTiff
-                    gdal_translate -of GTiff -b 3 -b 2 -b 1 -co "PHOTOMETRIC=RGB" -co "ALPHA=YES" ${jp2prod} temp-outputfile.tif
+                    gdal_translate -ot Byte -of GTiff -b 3 -b 2 -b 1 -scale -co "TILED=YES" -co "BLOCKXSIZE=512" -co "BLOCKYSIZE=512" -co "PHOTOMETRIC=RGB" -co "ALPHA=YES" ${jp2prod} temp-outputfile.tif
                     returnCode=$?
                     [ $returnCode -eq 0 ] || return ${ERR_CONVERT}
 
-                    gdalwarp -t_srs EPSG:3857 -srcnodata 0 -dstnodata 0 -dstalpha -co "PHOTOMETRIC=RGB" -co "ALPHA=YES" temp-outputfile.tif ${outputfile}
+                    gdalwarp -ot Byte -t_srs EPSG:3857 -srcnodata 0 -dstnodata 0 -dstalpha -co "TILED=YES" -co "BLOCKXSIZE=512" -co "BLOCKYSIZE=512" -co "PHOTOMETRIC=RGB" -co "ALPHA=YES" temp-outputfile.tif ${outputfile}
                     returnCode=$?
                     [ $returnCode -eq 0 ] || return ${ERR_CONVERT}
                     rm -f temp-outputfile.tif
@@ -581,10 +601,15 @@ function generate_full_res_tif (){
 		cd ${retrievedProduct}
 		unzip $ALOS_ZIP
 		for img in *.tif ; do
-		   ciop-log "INFO" "Reporjecting ALOS-2 image: $img"
-		   gdalwarp -srcnodata 0 -dstnodata 0 -dstalpha -co "ALPHA=YES" -t_srs EPSG:3857 $img ${OUTPUTDIR}/${img}
+		   ciop-log "INFO" "Reprojecting ALOS-2 image: $img"
+		   gdal_translate -scale -ot Byte -co "TILED=YES" -co "BLOCKXSIZE=512" -co "BLOCKYSIZE=512" -co "ALPHA=YES" $img temp-outputfile.tif
+		   returnCode=$?
+                   [ $returnCode -eq 0 ] || return ${ERR_CONVERT}		   
+ 
+		   gdalwarp -ot Byte -srcnodata 0 -dstnodata 0 -dstalpha -co "TILED=YES" -co "BLOCKXSIZE=512" -co "BLOCKYSIZE=512" -co "ALPHA=YES" -t_srs EPSG:3857 temp-outputfile.tif ${OUTPUTDIR}/${img}
 		   returnCode=$?
                    [ $returnCode -eq 0 ] || return ${ERR_CONVERT}
+                   rm -f temp-outputfile.tif
 
 		   gdaladdo -r average ${OUTPUTDIR}/${img} 2 4 8 16
 		   returnCode=$?
@@ -605,9 +630,15 @@ function generate_full_res_tif (){
 		fi
 		cd $IMAGEDATA
 		for img in *.tif ; do
-			gdalwarp -srcnodata 0 -dstnodata 0 -dstalpha -co "ALPHA=YES" -t_srs EPSG:3857 $img ${OUTPUTDIR}/${img}
+			
+			gdal_translate -scale -ot Byte -co "TILED=YES" -co "BLOCKXSIZE=512" -co "BLOCKYSIZE=512" -co "ALPHA=YES" $img temp-outputfile.tif
+			returnCode=$?
+                        [ $returnCode -eq 0 ] || return ${ERR_CONVERT}			
+
+			gdalwarp -ot Byte -srcnodata 0 -dstnodata 0 -dstalpha -co "TILED=YES" -co "BLOCKXSIZE=512" -co "BLOCKYSIZE=512" -co "ALPHA=YES" -t_srs EPSG:3857 temp-outputfile.tif ${OUTPUTDIR}/${img}
 			returnCode=$?
 			[ $returnCode -eq 0 ] || return ${ERR_CONVERT}
+			rm -f temp-outputfile.tif
 
 	                gdaladdo -r average ${OUTPUTDIR}/${img} 2 4 8 16
         	        returnCode=$?
@@ -626,9 +657,15 @@ function generate_full_res_tif (){
                 fi
                 cd $IMAGEDATA
                 for img in *.tif ; do
-                        gdalwarp -srcnodata 0 -dstnodata 0 -dstalpha -co "ALPHA=YES" -t_srs EPSG:3857 $img ${OUTPUTDIR}/${img}
+
+			gdal_translate -scale -ot Byte -co "TILED=YES" -co "BLOCKXSIZE=512" -co "BLOCKYSIZE=512" -co "ALPHA=YES" $img temp-outputfile.tif
                         returnCode=$?
                         [ $returnCode -eq 0 ] || return ${ERR_CONVERT}
+
+                        gdalwarp -ot Byte -srcnodata 0 -dstnodata 0 -dstalpha -co "TILED=YES" -co "BLOCKXSIZE=512" -co "BLOCKYSIZE=512" -co "ALPHA=YES" -t_srs EPSG:3857 temp-outputfile.tif ${OUTPUTDIR}/${img}
+                        returnCode=$?
+                        [ $returnCode -eq 0 ] || return ${ERR_CONVERT}
+                        rm -f temp-outputfile.tif
 
                         gdaladdo -r average ${OUTPUTDIR}/${img} 2 4 8 16
                         returnCode=$?
@@ -645,10 +682,15 @@ function generate_full_res_tif (){
 		tif_file=$(find ${retrievedProduct} -name '*.tif')
 
 		ciop-log "INFO" "Processing Tiff file: $tif_file"
-
-		gdalwarp -srcnodata 0 -dstnodata 0 -dstalpha -co "ALPHA=YES" -t_srs EPSG:3857 $tif_file ${OUTPUTDIR}/${tif_file##*/}
+		
+		gdal_translate -ot Byte -of GTiff -b 1 -b 2 -b 3 -scale -co "TILED=YES" -co "BLOCKXSIZE=512" -co "BLOCKYSIZE=512" -co "PHOTOMETRIC=RGB" -co "ALPHA=YES" $tif_file temp-outputfile.tif
+		returnCode=$?
+                [ $returnCode -eq 0 ] || return ${ERR_CONVERT}
+			
+		gdalwarp -ot Byte -t_srs EPSG:3857 -srcnodata 0 -dstnodata 0 -dstalpha -co "TILED=YES" -co "BLOCKXSIZE=512" -co "BLOCKYSIZE=512" -co "PHOTOMETRIC=RGB" -co "ALPHA=YES" temp-outputfile.tif ${OUTPUTDIR}/${tif_file##*/}
 		returnCode=$?
 		[ $returnCode -eq 0 ] || return ${ERR_CONVERT}
+		rm -f temp-outputfile.tif
 
 		gdaladdo -r average ${OUTPUTDIR}/${tif_file##*/} 2 4 8 16
 		returnCode=$?
@@ -665,16 +707,22 @@ function generate_full_res_tif (){
 	tif_file=$(find ${retrievedProduct} -name '*.tiff')
 
 	ciop-log "INFO" "Processing Tiff file: $tif_file"
-	ciop-log "INFO" "Runing gdal_translate"
+	ciop-log "INFO" "Running gdal_translate"
 	outputfile=${tif_file##*/}; outputfile=${outputfile%.tiff}.tif
-	gdal_translate -of GTiff -co "PHOTOMETRIC=RGB" -b 3 -b 2 -b 1 $tif_file ${TMPDIR}/${outputfile}
+	gdal_translate -ot Byte -of GTiff -b 3 -b 2 -b 1 -scale -co "TILED=YES" -co "BLOCKXSIZE=512" -co "BLOCKYSIZE=512" -co "PHOTOMETRIC=RGB" -co "ALPHA=YES" $tif_file ${TMPDIR}/${outputfile}
 	returnCode=$?
 	[ $returnCode -eq 0 ] || return ${ERR_CONVERT}
 
-	ciop-log "INFO" "Runing gdalwarp"
-	gdalwarp -srcnodata 0 -dstnodata 0 -dstalpha -co "ALPHA=YES" -t_srs EPSG:3857 ${TMPDIR}/${outputfile} ${OUTPUTDIR}/${outputfile}
+	ciop-log "INFO" "Running gdalwarp"
+	gdalwarp -ot Byte -t_srs EPSG:3857 -srcnodata 0 -dstnodata 0 -dstalpha -co "TILED=YES" -co "BLOCKXSIZE=512" -co "BLOCKYSIZE=512" -co "PHOTOMETRIC=RGB" -co "ALPHA=YES" ${TMPDIR}/${outputfile} ${OUTPUTDIR}/${outputfile}
 	returnCode=$?
 	[ $returnCode -eq 0 ] || return ${ERR_CONVERT}
+	rm -f ${TMPDIR}/${outputfile}
+
+	gdaladdo -r average ${OUTPUTDIR}/${outputfile} 2 4 8 16
+        returnCode=$?
+        [ $returnCode -eq 0 ] || return ${ERR_CONVERT}
+
   fi
 
   if [[ "${mission}" == "Kanopus-V" ]]; then
@@ -685,14 +733,21 @@ function generate_full_res_tif (){
         ciop-log "INFO" "Processing Tiff file: $tif_file"
         ciop-log "INFO" "Runing gdal_translate"
         outputfile=${tif_file##*/}; outputfile=${outputfile%.tiff}.tif
-        gdal_translate -of GTiff -co "PHOTOMETRIC=RGB" -b 3 -b 2 -b 1 $tif_file ${TMPDIR}/${outputfile}
+        gdal_translate -ot Byte -of GTiff -b 3 -b 2 -b 1 -scale -co "TILED=YES" -co "BLOCKXSIZE=512" -co "BLOCKYSIZE=512" -co "PHOTOMETRIC=RGB" -co "ALPHA=YES" $tif_file ${TMPDIR}/${outputfile}
         returnCode=$?
         [ $returnCode -eq 0 ] || return ${ERR_CONVERT}
 
         ciop-log "INFO" "Runing gdalwarp"
-        gdalwarp -srcnodata 0 -dstnodata 0 -dstalpha -co "ALPHA=YES" -t_srs EPSG:3857 ${TMPDIR}/${outputfile} ${OUTPUTDIR}/${outputfile}
+        gdalwarp -ot Byte -t_srs EPSG:3857 -srcnodata 0 -dstnodata 0 -dstalpha -co "TILED=YES" -co "BLOCKXSIZE=512" -co "BLOCKYSIZE=512" -co "PHOTOMETRIC=RGB" -co "ALPHA=YES" ${TMPDIR}/${outputfile} ${OUTPUTDIR}/${outputfile}
         returnCode=$?
         [ $returnCode -eq 0 ] || return ${ERR_CONVERT}
+	rm -f ${TMPDIR}/${outputfile}
+	
+	gdaladdo -r average ${OUTPUTDIR}/${outputfile} 2 4 8 16
+        returnCode=$?
+        [ $returnCode -eq 0 ] || return ${ERR_CONVERT}
+
+ 
   fi
 
   return 0
