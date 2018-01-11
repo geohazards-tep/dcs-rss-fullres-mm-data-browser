@@ -11,7 +11,7 @@
       </defaultJobconf>
     </jobTemplate>
   </jobTemplates>
-  <workflow id="full-res-multi-mission-data-browser" title="Full resolution multi mission data browser" abstract="This service provides the possibility to browse the selected data at full resolution">
+  <workflow id="full-res-multi-mission-data-browser" title="Full Resolution Rasterization" abstract="This service allows to generate full-res RGB (Optical) and single-channel (SAR) Geotiff images from multi-sensors EO data products. In case of Sentinel-1 data the result is 20mx20m in order to increase the number of looks and reduce image size.">
     <workflowVersion>1.0</workflowVersion>
     <node id="node_data_download_publish">
       <job id="data_download_publish"/>
