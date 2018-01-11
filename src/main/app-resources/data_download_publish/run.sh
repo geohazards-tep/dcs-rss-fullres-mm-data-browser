@@ -273,59 +273,288 @@ function mission_prod_retrieval(){
 }
 
 
+function get_polarization_s1() {
+
+  local productName=$1
+
+  #productName assumed like S1A_IW_SLC__1SPP_* where PP is the polarization to be extracted
+
+  polarizationName=$( echo ${productName:14:2} )
+  [ -z "${polarizationName}" ] && return ${ERR_GETPOLARIZATION}
+
+  #check on extracted polarization
+  # allowed values are: SH SV DH DV
+  if [ "${polarizationName}" = "DH" ] || [ "${polarizationName}" = "DV" ] || [ "${polarizationName}" = "SH" ] || [ "${polarizationName}" = "SV" ]; then
+     echo ${polarizationName}
+     return 0
+  else
+     return ${ERR_WRONGPOLARIZATION}
+  fi
+}
+
+
+function create_snap_request_cal_ml_tc_db_scale_byte() {
+
+# function call  "${s1_manifest}" "${bandCoPol}"  "${outProd}"
+
+# function which creates the actual request from
+# a template and returns the path to the request
+
+inputNum=$#
+[ "$inputNum" -ne 3 ] && return ${SNAP_REQUEST_ERROR}
+
+local s1_manifest=$1
+local bandCoPol=$2
+local outProd=$3
+#sets the output filename
+snap_request_filename="${TMPDIR}/$( uuidgen ).xml"
+
+   cat << EOF > ${snap_request_filename}
+<graph id="Graph">
+  <version>1.0</version>
+  <node id="Read">
+    <operator>Read</operator>
+    <sources/>
+    <parameters class="com.bc.ceres.binding.dom.XppDomElement">
+      <file>${s1_manifest}</file>
+    </parameters>
+  </node>
+  <node id="Remove-GRD-Border-Noise">
+    <operator>Remove-GRD-Border-Noise</operator>
+    <sources>
+      <sourceProduct refid="Read"/>
+    </sources>
+    <parameters class="com.bc.ceres.binding.dom.XppDomElement">
+      <selectedPolarisations/>
+      <borderLimit>1000</borderLimit>
+      <trimThreshold>0.5</trimThreshold>
+    </parameters>
+  </node>
+  <node id="Calibration">
+    <operator>Calibration</operator>
+    <sources>
+      <sourceProduct refid="Remove-GRD-Border-Noise"/>
+    </sources>
+    <parameters class="com.bc.ceres.binding.dom.XppDomElement">
+      <sourceBands/>
+      <auxFile>Product Auxiliary File</auxFile>
+      <externalAuxFile/>
+      <outputImageInComplex>false</outputImageInComplex>
+      <outputImageScaleInDb>false</outputImageScaleInDb>
+      <createGammaBand>false</createGammaBand>
+      <createBetaBand>false</createBetaBand>
+      <selectedPolarisations/>
+      <outputSigmaBand>true</outputSigmaBand>
+      <outputGammaBand>false</outputGammaBand>
+      <outputBetaBand>false</outputBetaBand>
+    </parameters>
+  </node>
+  <node id="Multilook">
+    <operator>Multilook</operator>
+    <sources>
+      <sourceProduct refid="Calibration"/>
+    </sources>
+    <parameters class="com.bc.ceres.binding.dom.XppDomElement">
+      <sourceBands/>
+      <nRgLooks>2</nRgLooks>
+      <nAzLooks>2</nAzLooks>
+      <outputIntensity>true</outputIntensity>
+      <grSquarePixel>true</grSquarePixel>
+    </parameters>
+  </node>
+  <node id="Terrain-Correction">
+    <operator>Terrain-Correction</operator>
+    <sources>
+       <sourceProduct refid="Multilook"/> 
+    </sources>
+    <parameters class="com.bc.ceres.binding.dom.XppDomElement">
+      <sourceBands/>
+      <demName>SRTM 3Sec</demName>
+      <externalDEMFile/>
+      <externalDEMNoDataValue>0.0</externalDEMNoDataValue>
+      <externalDEMApplyEGM>true</externalDEMApplyEGM>
+      <demResamplingMethod>BILINEAR_INTERPOLATION</demResamplingMethod>
+      <imgResamplingMethod>BILINEAR_INTERPOLATION</imgResamplingMethod>
+      <pixelSpacingInMeter>20.0</pixelSpacingInMeter>
+      <pixelSpacingInDegree>1.796630568239043E-4</pixelSpacingInDegree>
+      <mapProjection>WGS84(DD)</mapProjection>
+      <nodataValueAtSea>true</nodataValueAtSea>
+      <saveDEM>false</saveDEM>
+      <saveLatLon>false</saveLatLon>
+      <saveIncidenceAngleFromEllipsoid>false</saveIncidenceAngleFromEllipsoid>
+      <saveLocalIncidenceAngle>false</saveLocalIncidenceAngle>
+      <saveProjectedLocalIncidenceAngle>false</saveProjectedLocalIncidenceAngle>
+      <saveSelectedSourceBand>true</saveSelectedSourceBand>
+      <outputComplex>false</outputComplex>
+      <applyRadiometricNormalization>false</applyRadiometricNormalization>
+      <saveSigmaNought>false</saveSigmaNought>
+      <saveGammaNought>false</saveGammaNought>
+      <saveBetaNought>false</saveBetaNought>
+      <incidenceAngleForSigma0>Use projected local incidence angle from DEM</incidenceAngleForSigma0>
+      <incidenceAngleForGamma0>Use projected local incidence angle from DEM</incidenceAngleForGamma0>
+      <auxFile>Latest Auxiliary File</auxFile>
+      <externalAuxFile/>
+    </parameters>
+  </node>
+  <node id="LinearToFromdB">
+    <operator>LinearToFromdB</operator>
+    <sources>
+      <sourceProduct refid="Terrain-Correction"/>
+    </sources>
+    <parameters class="com.bc.ceres.binding.dom.XppDomElement">
+      <sourceBands/>
+    </parameters>
+  </node>
+  <node id="BandSelect">
+    <operator>BandSelect</operator>
+    <sources>
+      <sourceProduct refid="LinearToFromdB"/>
+    </sources>
+    <parameters class="com.bc.ceres.binding.dom.XppDomElement">
+      <selectedPolarisations/>
+      <sourceBands>${bandCoPol}</sourceBands>
+      <bandNamePattern/>
+    </parameters>
+  </node>
+  <node id="BandMaths">
+    <operator>BandMaths</operator>
+    <sources>
+      <sourceProduct refid="BandSelect"/>
+    </sources>
+    <parameters class="com.bc.ceres.binding.dom.XppDomElement">
+      <targetBands>
+        <targetBand>
+          <name>clipped</name>
+          <type>float32</type>
+          <expression>if fneq(${bandCoPol},0.0) then (if ${bandCoPol}&lt;=-15 then -15 else (if ${bandCoPol}&gt;=5 then 5 else ${bandCoPol})) else NaN</expression>
+          <description/>
+          <unit/>
+          <noDataValue>NaN</noDataValue>
+        </targetBand>
+      </targetBands>
+      <variables/>
+    </parameters>
+  </node>
+  <node id="BandMaths(2)">
+    <operator>BandMaths</operator>
+    <sources>
+      <sourceProduct refid="BandMaths"/>
+    </sources>
+    <parameters class="com.bc.ceres.binding.dom.XppDomElement">
+      <targetBands>
+        <targetBand>
+          <name>quantized</name>
+          <type>uint8</type>
+          <expression>if !nan(clipped) then floor(clipped*12.7+191.5) else NaN</expression>
+          <description/>
+          <unit/>
+          <noDataValue>NaN</noDataValue>
+        </targetBand>
+      </targetBands>
+      <variables/>
+    </parameters>
+  </node>
+  <node id="Write">
+    <operator>Write</operator>
+    <sources>
+      <sourceProduct refid="BandMaths(2)"/>
+    </sources>
+    <parameters class="com.bc.ceres.binding.dom.XppDomElement">
+      <file>${outProd}</file>
+      <formatName>GeoTIFF-BigTIFF</formatName>
+    </parameters>
+  </node>
+  <applicationData id="Presentation">
+    <Description/>
+    <node id="Read">
+            <displayPosition x="37.0" y="134.0"/>
+    </node>
+    <node id="Calibration">
+      <displayPosition x="117.0" y="134.0"/>
+    </node>
+    <node id="Terrain-Correction">
+      <displayPosition x="208.0" y="133.0"/>
+    </node>
+    <node id="LinearToFromdB">
+      <displayPosition x="345.0" y="135.0"/>
+    </node>
+    <node id="BandSelect">
+      <displayPosition x="472.0" y="131.0"/>
+    </node>
+    <node id="Write">
+            <displayPosition x="578.0" y="133.0"/>
+    </node>
+  </applicationData>
+</graph>
+EOF
+
+    [ $? -eq 0 ] && {
+        echo "${snap_request_filename}"
+        return 0
+    } || return ${SNAP_REQUEST_ERROR}
+}
+
+
 # function that generate the full res geotiff image from the original data product
 function generate_full_res_tif (){
 # function call generate_full_res_tif "${retrievedProduct}" "${mission}
   
   local retrievedProduct=$1
   local productName=$( basename "$retrievedProduct" )
+  local prodNameNoExt="${productName%%.*}"
   local mission=$2
 
   if [ ${mission} = "Sentinel-1"  ] ; then
 
     if [[ -d "${retrievedProduct}" ]]; then
-      # loop on tiff products contained in the "measurement" folder to reproject prior publishing
-      find ${retrievedProduct}/ -name '*.tiff' > list
-      for tifProd in $(cat list);
-      do
-          basename_tiff=$( basename $tifProd )
-          ciop-log "INFO" "Reprojecting "$mission" image: $tifProd"
-          gdalwarp -ot UInt16 -srcnodata 0 -dstnodata 0 -dstalpha -co "TILED=YES" -co "BLOCKXSIZE=512" -co "BLOCKYSIZE=512" -co "ALPHA=YES" -t_srs EPSG:3857 ${tifProd} ${TMPDIR}/temp-outputfile.tif
-          returnCode=$?
-          [ $returnCode -eq 0 ] || return ${ERR_CONVERT}
+      s1_manifest=$(find ${retrievedProduct}/ -name 'manifest.safe')
+      ciop-log "DEBUG" "s1_manifest ${s1_manifest}"
+      polType=$( get_polarization_s1 "${productName}" )
+      [[ $? -eq 0  ]] || return $?
+      case "$polType" in
+          "SH")
+              bandCoPol="Sigma0_HH_db"
+              ;;
+          "SV")
+              bandCoPol="Sigma0_VV_db"
+              ;;
+          "DH")
+              bandCoPol="Sigma0_HH_db"
+              ;;
+          "DV")
+              bandCoPol="Sigma0_VV_db"
+              ;;
+      esac
+      outProd=${TMPDIR}/s1_cal_tc_db_co_pol
+      outProdTIF=${outProd}.tif
+      # prepare the SNAP request
+      SNAP_REQUEST=$( create_snap_request_cal_ml_tc_db_scale_byte "${s1_manifest}" "${bandCoPol}"  "${outProd}")
+      [ $? -eq 0 ] || return ${SNAP_REQUEST_ERROR}
+      [ $DEBUG -eq 1 ] && cat ${SNAP_REQUEST}
+      # report activity in the log
+      ciop-log "INFO" "Generated request file: ${SNAP_REQUEST}"
+      # report activity in the log
+      ciop-log "INFO" "Invoking SNAP-gpt on the generated request file for Sentinel 1 data pre processing"
+      # invoke the ESA SNAP toolbox
+      gpt $SNAP_REQUEST -c "${CACHE_SIZE}" &> /dev/null
+      # check the exit code
+      [ $? -eq 0 ] || return $ERR_SNAP
+      # report activity in the log
+      ciop-log "INFO" "Invoking gdalwarp for tif reprojection and alpha band creation"
+      # gdalwarp for tif reprojection and alpha band creation
+      #gdalwarp -ot Byte -t_srs EPSG:3857 -srcnodata 0 -dstnodata 0 -dstalpha -co "TILED=YES" -co "BLOCKXSIZE=512" -co "BLOCKYSIZE=512" -co "ALPHA=YES" ${outProdTIF} ${OUTPUTDIR}/${prodNameNoExt}_${bandCoPol}.tif
 
-          ciop-log "INFO" "Converting to dB "$mission" image: $tifProd"
-          #prepare snap request file for linear to dB conversion
-          SNAP_REQUEST=$( create_snap_request_linear_to_dB "${TMPDIR}/temp-outputfile.tif" "${TMPDIR}/temp-outputfile2.tif" )
-          [ $? -eq 0 ] || return ${SNAP_REQUEST_ERROR}
-          [ $DEBUG -eq 1 ] && cat ${SNAP_REQUEST}
-          # invoke the ESA SNAP toolbox
-          gpt ${SNAP_REQUEST} -c "${CACHE_SIZE}" &> /dev/null
-          # check the exit code
-          [ $? -eq 0 ] || return $ERR_SNAP
+      gdalwarp -ot Byte -t_srs EPSG:3857 -srcnodata 0 -dstnodata 0 -dstalpha -co "ALPHA=YES" ${outProdTIF} ${OUTPUTDIR}/${prodNameNoExt}_${bandCoPol}.tif       
+      returnCode=$?
+      [ $returnCode -eq 0 ] || return ${ERR_CONVERT}
+      gdaladdo -r average ${OUTPUTDIR}/${prodNameNoExt}_${bandCoPol}.tif 2 4 8 16
+      # cleanup
+      rm -f ${outProdTIF}
 
-          ciop-log "INFO" "Scaling and alpha band addition to "$mission" image: $tifProd"
-          gdal_translate -scale -ot Byte -co "TILED=YES" -co "BLOCKXSIZE=512" -co "BLOCKYSIZE=512" -co "ALPHA=YES" ${TMPDIR}/temp-outputfile2.tif ${TMPDIR}/temp-outputfile3.tif
-          returnCode=$?
-          [ $returnCode -eq 0 ] || return ${ERR_CONVERT}
-
-          gdalwarp -ot Byte -srcnodata 0 -dstnodata 0 -dstalpha -co "TILED=YES" -co "BLOCKXSIZE=512" -co "BLOCKYSIZE=512" -co "ALPHA=YES" -t_srs EPSG:3857 ${TMPDIR}/temp-outputfile3.tif ${OUTPUTDIR}/${basename_tiff}
-          returnCode=$?
-          [ $returnCode -eq 0 ] || return ${ERR_CONVERT}
-
-          gdaladdo -r average ${OUTPUTDIR}/${basename_tiff} 2 4 8 16
-          returnCode=$?
-          [ $returnCode -eq 0 ] || return ${ERR_CONVERT}
-          # cleanup
-	  rm -rf ${tifProd} ${TMPDIR}/temp-outputfile*
-      done
     else
       ciop-log "ERROR" "The retrieved product ${retrievedProduct} is not a directory or does not exist"
       return ${ERR_UNPACKING}
     fi
-
-    # cleanup list
-    rm list
 
   fi
 
