@@ -23,7 +23,7 @@ ERR_GETPRODMTD=10
 ERR_PCONVERT=11
 ERR_UNPACKING=12
 ERR_CONVERT=13
-ERR_GDAL_CONF=14
+
 
 # add a trap to exit gracefully
 function cleanExit ()
@@ -46,7 +46,6 @@ function cleanExit ()
 	${ERR_PCONVERT})          msg="PCONVERT failed to process";;
 	${ERR_UNPACKING})         msg="Error unpacking input product";;
 	${ERR_CONVERT})           msg="Error generating output product";;
-	${ERR_GDAL_CONF})         msg="Error GDAL configuraiton file not found";;  
         *)                        msg="Unknown error";;
     esac
 
@@ -59,7 +58,8 @@ trap cleanExit EXIT
 # function that checks the product type from the product name
 function check_product_type() {
   
-  local productName=$1
+  local retrievedProduct=$1
+  local productName=$( basename "$retrievedProduct" )
   local mission=$2
 
   if [ ${mission} = "Sentinel-1"  ] ; then
@@ -163,6 +163,12 @@ function check_product_type() {
 
   fi
 
+  if [[ "${mission}" == "SPOT-6" ]] || [[ "${mission}" == "SPOT-7"  ]]; then
+        spot_xml=$(find ${retrievedProduct}/ -name 'DIM_SPOT?_MS_*.XML' | head -1 | sed 's|^.*\/||')
+	prodTypeName="${spot_xml:29:3}"
+        [[ "$prodTypeName" != "ORT" ]] && return $ERR_WRONGPRODTYPE
+  fi
+
   if [[ "${mission}" == "UK-DMC2" ]]; then
 	if [[ -d "${retrievedProduct}" ]]; then
 		prodTypeName=$(ls ${retrievedProduct} | sed -n -e 's|^.*_\(.*\)\.tif$|\1|p')
@@ -181,8 +187,13 @@ function check_product_type() {
   fi
 
   if [[ "${mission}" == "Kanopus-V" ]]; then
-	### !!! TO-DO: update once reference Kanopus-V info, doc and samples are provided !!! ###
-	prodTypeName="KanopusV"
+	prodTypeName=${prodname:10:3}
+	[[ "$prodTypeName" != "MSS" ]] && return $ERR_WRONGPRODTYPE
+  fi
+
+  # No support for Kompsat-5
+  if [[ "${mission}" == "Kompsat-5" ]]; then
+	return $ERR_WRONGPRODTYPE
   fi
 
   echo ${prodTypeName}
@@ -220,11 +231,13 @@ function get_data() {
 # function that retrieves the mission data identifier from the product name 
 function mission_prod_retrieval(){
 	local mission=""
-        prod_basename=$1
+        local retrievedProduct=$1
+        local prod_basename=$( basename "$retrievedProduct" )
 
         prod_basename_substr_3=${prod_basename:0:3}
         prod_basename_substr_4=${prod_basename:0:4}
         prod_basename_substr_5=${prod_basename:0:5}
+	prod_basename_substr_9=${prod_basename:0:9}
         [ "${prod_basename_substr_3}" = "S1A" ] && mission="Sentinel-1"
         [ "${prod_basename_substr_3}" = "S1B" ] && mission="Sentinel-1"
         [ "${prod_basename_substr_3}" = "S2A" ] && mission="Sentinel-2"
@@ -239,10 +252,16 @@ function mission_prod_retrieval(){
         [ "${prod_basename_substr_5}" = "U2007" ] && mission="UK-DMC2"
 	[ "${prod_basename_substr_5}" = "ORTHO" ] && mission="UK-DMC2"
         [ "${prod_basename}" = "Resurs-P" ] && mission="Resurs-P"
-        [ "${prod_basename}" = "Kanopus-V" ] && mission="Kanopus-V"
+        [ "${prod_basename_substr_9}" = "KANOPUS_V" ] && mission="Kanopus-V"
         alos2_test=$(echo "${prod_basename}" | grep "ALOS2")
         [[ -z "${alos2_test}" ]] && alos2_test=$(ls "${retrievedProduct}" | grep "ALOS2")
         [ "${alos2_test}" = "" ] || mission="Alos-2"
+	spot6_test=$(echo "${prod_basename}" | grep "SPOT6")
+        [[ -z "${spot6_test}" ]] && spot6_test=$(ls "${retrievedProduct}" | grep "SPOT6")
+        [ "${spot6_test}" = "" ] || mission="SPOT-6"
+	spot7_test=$(echo "${prod_basename}" | grep "SPOT7")
+        [[ -z "${spot7_test}" ]] && spot7_test=$(ls "${retrievedProduct}" | grep "SPOT7")
+        [ "${spot7_test}" = "" ] || mission="SPOT-7"
 	[ "${prod_basename_substr_3}" = "SO_" ] && mission="TerraSAR-X"
 	[ "${prod_basename_substr_4}" = "dims" ] && mission="TerraSAR-X"
         
@@ -254,48 +273,288 @@ function mission_prod_retrieval(){
 }
 
 
-# function that generate the full res geotiff image from the original data product
-function generate_full_res_tif (){
-# function call generate_full_res_tif "${prodname}" "${mission}"
+function get_polarization_s1() {
 
   local productName=$1
-  local mission=$2
 
-  #Setup GDAL variables
-  #GDAL_CONF_FILE="/application/gdal/conf_gdal_env.sh"
-  #[[ -s "$GDAL_CONF_FILE" ]] || return ${ERR_GDAL_CONF} 
-  #. $GDAL_CONF_FILE
+  #productName assumed like S1A_IW_SLC__1SPP_* where PP is the polarization to be extracted
+
+  polarizationName=$( echo ${productName:14:2} )
+  [ -z "${polarizationName}" ] && return ${ERR_GETPOLARIZATION}
+
+  #check on extracted polarization
+  # allowed values are: SH SV DH DV
+  if [ "${polarizationName}" = "DH" ] || [ "${polarizationName}" = "DV" ] || [ "${polarizationName}" = "SH" ] || [ "${polarizationName}" = "SV" ]; then
+     echo ${polarizationName}
+     return 0
+  else
+     return ${ERR_WRONGPOLARIZATION}
+  fi
+}
+
+
+function create_snap_request_cal_ml_tc_db_scale_byte() {
+
+# function call  "${s1_manifest}" "${bandCoPol}"  "${outProd}"
+
+# function which creates the actual request from
+# a template and returns the path to the request
+
+inputNum=$#
+[ "$inputNum" -ne 3 ] && return ${SNAP_REQUEST_ERROR}
+
+local s1_manifest=$1
+local bandCoPol=$2
+local outProd=$3
+#sets the output filename
+snap_request_filename="${TMPDIR}/$( uuidgen ).xml"
+
+   cat << EOF > ${snap_request_filename}
+<graph id="Graph">
+  <version>1.0</version>
+  <node id="Read">
+    <operator>Read</operator>
+    <sources/>
+    <parameters class="com.bc.ceres.binding.dom.XppDomElement">
+      <file>${s1_manifest}</file>
+    </parameters>
+  </node>
+  <node id="Remove-GRD-Border-Noise">
+    <operator>Remove-GRD-Border-Noise</operator>
+    <sources>
+      <sourceProduct refid="Read"/>
+    </sources>
+    <parameters class="com.bc.ceres.binding.dom.XppDomElement">
+      <selectedPolarisations/>
+      <borderLimit>1000</borderLimit>
+      <trimThreshold>0.5</trimThreshold>
+    </parameters>
+  </node>
+  <node id="Calibration">
+    <operator>Calibration</operator>
+    <sources>
+      <sourceProduct refid="Remove-GRD-Border-Noise"/>
+    </sources>
+    <parameters class="com.bc.ceres.binding.dom.XppDomElement">
+      <sourceBands/>
+      <auxFile>Product Auxiliary File</auxFile>
+      <externalAuxFile/>
+      <outputImageInComplex>false</outputImageInComplex>
+      <outputImageScaleInDb>false</outputImageScaleInDb>
+      <createGammaBand>false</createGammaBand>
+      <createBetaBand>false</createBetaBand>
+      <selectedPolarisations/>
+      <outputSigmaBand>true</outputSigmaBand>
+      <outputGammaBand>false</outputGammaBand>
+      <outputBetaBand>false</outputBetaBand>
+    </parameters>
+  </node>
+  <node id="Multilook">
+    <operator>Multilook</operator>
+    <sources>
+      <sourceProduct refid="Calibration"/>
+    </sources>
+    <parameters class="com.bc.ceres.binding.dom.XppDomElement">
+      <sourceBands/>
+      <nRgLooks>2</nRgLooks>
+      <nAzLooks>2</nAzLooks>
+      <outputIntensity>true</outputIntensity>
+      <grSquarePixel>true</grSquarePixel>
+    </parameters>
+  </node>
+  <node id="Terrain-Correction">
+    <operator>Terrain-Correction</operator>
+    <sources>
+       <sourceProduct refid="Multilook"/> 
+    </sources>
+    <parameters class="com.bc.ceres.binding.dom.XppDomElement">
+      <sourceBands/>
+      <demName>SRTM 3Sec</demName>
+      <externalDEMFile/>
+      <externalDEMNoDataValue>0.0</externalDEMNoDataValue>
+      <externalDEMApplyEGM>true</externalDEMApplyEGM>
+      <demResamplingMethod>BILINEAR_INTERPOLATION</demResamplingMethod>
+      <imgResamplingMethod>BILINEAR_INTERPOLATION</imgResamplingMethod>
+      <pixelSpacingInMeter>20.0</pixelSpacingInMeter>
+      <pixelSpacingInDegree>1.796630568239043E-4</pixelSpacingInDegree>
+      <mapProjection>WGS84(DD)</mapProjection>
+      <nodataValueAtSea>true</nodataValueAtSea>
+      <saveDEM>false</saveDEM>
+      <saveLatLon>false</saveLatLon>
+      <saveIncidenceAngleFromEllipsoid>false</saveIncidenceAngleFromEllipsoid>
+      <saveLocalIncidenceAngle>false</saveLocalIncidenceAngle>
+      <saveProjectedLocalIncidenceAngle>false</saveProjectedLocalIncidenceAngle>
+      <saveSelectedSourceBand>true</saveSelectedSourceBand>
+      <outputComplex>false</outputComplex>
+      <applyRadiometricNormalization>false</applyRadiometricNormalization>
+      <saveSigmaNought>false</saveSigmaNought>
+      <saveGammaNought>false</saveGammaNought>
+      <saveBetaNought>false</saveBetaNought>
+      <incidenceAngleForSigma0>Use projected local incidence angle from DEM</incidenceAngleForSigma0>
+      <incidenceAngleForGamma0>Use projected local incidence angle from DEM</incidenceAngleForGamma0>
+      <auxFile>Latest Auxiliary File</auxFile>
+      <externalAuxFile/>
+    </parameters>
+  </node>
+  <node id="LinearToFromdB">
+    <operator>LinearToFromdB</operator>
+    <sources>
+      <sourceProduct refid="Terrain-Correction"/>
+    </sources>
+    <parameters class="com.bc.ceres.binding.dom.XppDomElement">
+      <sourceBands/>
+    </parameters>
+  </node>
+  <node id="BandSelect">
+    <operator>BandSelect</operator>
+    <sources>
+      <sourceProduct refid="LinearToFromdB"/>
+    </sources>
+    <parameters class="com.bc.ceres.binding.dom.XppDomElement">
+      <selectedPolarisations/>
+      <sourceBands>${bandCoPol}</sourceBands>
+      <bandNamePattern/>
+    </parameters>
+  </node>
+  <node id="BandMaths">
+    <operator>BandMaths</operator>
+    <sources>
+      <sourceProduct refid="BandSelect"/>
+    </sources>
+    <parameters class="com.bc.ceres.binding.dom.XppDomElement">
+      <targetBands>
+        <targetBand>
+          <name>clipped</name>
+          <type>float32</type>
+          <expression>if fneq(${bandCoPol},0.0) then (if ${bandCoPol}&lt;=-15 then -15 else (if ${bandCoPol}&gt;=5 then 5 else ${bandCoPol})) else NaN</expression>
+          <description/>
+          <unit/>
+          <noDataValue>NaN</noDataValue>
+        </targetBand>
+      </targetBands>
+      <variables/>
+    </parameters>
+  </node>
+  <node id="BandMaths(2)">
+    <operator>BandMaths</operator>
+    <sources>
+      <sourceProduct refid="BandMaths"/>
+    </sources>
+    <parameters class="com.bc.ceres.binding.dom.XppDomElement">
+      <targetBands>
+        <targetBand>
+          <name>quantized</name>
+          <type>uint8</type>
+          <expression>if !nan(clipped) then floor(clipped*12.7+191.5) else NaN</expression>
+          <description/>
+          <unit/>
+          <noDataValue>NaN</noDataValue>
+        </targetBand>
+      </targetBands>
+      <variables/>
+    </parameters>
+  </node>
+  <node id="Write">
+    <operator>Write</operator>
+    <sources>
+      <sourceProduct refid="BandMaths(2)"/>
+    </sources>
+    <parameters class="com.bc.ceres.binding.dom.XppDomElement">
+      <file>${outProd}</file>
+      <formatName>GeoTIFF-BigTIFF</formatName>
+    </parameters>
+  </node>
+  <applicationData id="Presentation">
+    <Description/>
+    <node id="Read">
+            <displayPosition x="37.0" y="134.0"/>
+    </node>
+    <node id="Calibration">
+      <displayPosition x="117.0" y="134.0"/>
+    </node>
+    <node id="Terrain-Correction">
+      <displayPosition x="208.0" y="133.0"/>
+    </node>
+    <node id="LinearToFromdB">
+      <displayPosition x="345.0" y="135.0"/>
+    </node>
+    <node id="BandSelect">
+      <displayPosition x="472.0" y="131.0"/>
+    </node>
+    <node id="Write">
+            <displayPosition x="578.0" y="133.0"/>
+    </node>
+  </applicationData>
+</graph>
+EOF
+
+    [ $? -eq 0 ] && {
+        echo "${snap_request_filename}"
+        return 0
+    } || return ${SNAP_REQUEST_ERROR}
+}
+
+
+# function that generate the full res geotiff image from the original data product
+function generate_full_res_tif (){
+# function call generate_full_res_tif "${retrievedProduct}" "${mission}
+  
+  local retrievedProduct=$1
+  local productName=$( basename "$retrievedProduct" )
+  local prodNameNoExt="${productName%%.*}"
+  local mission=$2
 
   if [ ${mission} = "Sentinel-1"  ] ; then
 
     if [[ -d "${retrievedProduct}" ]]; then
-      # loop on tiff products contained in the "measuremen" folder to reproject prior publishing
-#      ls ${retrievedProduct}/measurement/*.tiff > list
-      find ${retrievedProduct}/ -name '*.tiff' > list
-      for tifProd in $(cat list);
-      do
-          basename_tiff=$( basename $tifProd )
-          gdalwarp -srcnodata 0 -dstnodata 0 -dstalpha -co "ALPHA=YES" -t_srs "EPSG:3857" -multi -of GTiff "${tifProd}" ${TMPDIR}/${basename_tiff}
-	  returnCode=$?
-	  [ $returnCode -eq 0 ] || return ${ERR_CONVERT}
+      s1_manifest=$(find ${retrievedProduct}/ -name 'manifest.safe')
+      ciop-log "DEBUG" "s1_manifest ${s1_manifest}"
+      polType=$( get_polarization_s1 "${productName}" )
+      [[ $? -eq 0  ]] || return $?
+      case "$polType" in
+          "SH")
+              bandCoPol="Sigma0_HH_db"
+              ;;
+          "SV")
+              bandCoPol="Sigma0_VV_db"
+              ;;
+          "DH")
+              bandCoPol="Sigma0_HH_db"
+              ;;
+          "DV")
+              bandCoPol="Sigma0_VV_db"
+              ;;
+      esac
+      outProd=${TMPDIR}/s1_cal_tc_db_co_pol
+      outProdTIF=${outProd}.tif
+      # prepare the SNAP request
+      SNAP_REQUEST=$( create_snap_request_cal_ml_tc_db_scale_byte "${s1_manifest}" "${bandCoPol}"  "${outProd}")
+      [ $? -eq 0 ] || return ${SNAP_REQUEST_ERROR}
+      [ $DEBUG -eq 1 ] && cat ${SNAP_REQUEST}
+      # report activity in the log
+      ciop-log "INFO" "Generated request file: ${SNAP_REQUEST}"
+      # report activity in the log
+      ciop-log "INFO" "Invoking SNAP-gpt on the generated request file for Sentinel 1 data pre processing"
+      # invoke the ESA SNAP toolbox
+      gpt $SNAP_REQUEST -c "${CACHE_SIZE}" &> /dev/null
+      # check the exit code
+      [ $? -eq 0 ] || return $ERR_SNAP
+      # report activity in the log
+      ciop-log "INFO" "Invoking gdalwarp for tif reprojection and alpha band creation"
+      # gdalwarp for tif reprojection and alpha band creation
+      #gdalwarp -ot Byte -t_srs EPSG:3857 -srcnodata 0 -dstnodata 0 -dstalpha -co "TILED=YES" -co "BLOCKXSIZE=512" -co "BLOCKYSIZE=512" -co "ALPHA=YES" ${outProdTIF} ${OUTPUTDIR}/${prodNameNoExt}_${bandCoPol}.tif
 
-          #Add overviews
-          gdaladdo -r average ${TMPDIR}/${basename_tiff} 2 4 8 16
-          returnCode=$?
-          [ $returnCode -eq 0 ] || return ${ERR_CONVERT}
+      gdalwarp -ot Byte -t_srs EPSG:3857 -srcnodata 0 -dstnodata 0 -dstalpha -co "ALPHA=YES" ${outProdTIF} ${OUTPUTDIR}/${prodNameNoExt}_${bandCoPol}.tif       
+      returnCode=$?
+      [ $returnCode -eq 0 ] || return ${ERR_CONVERT}
+      gdaladdo -r average ${OUTPUTDIR}/${prodNameNoExt}_${bandCoPol}.tif 2 4 8 16
+      # cleanup
+      rm -f ${outProdTIF}
 
-	  mv ${TMPDIR}/${basename_tiff} ${OUTPUTDIR}/${basename_tiff}
-
-	  # cleanup
-          rm -rf $tifProd ${TMPDIR}/${basename_tiff}
-      done
     else
       ciop-log "ERROR" "The retrieved product ${retrievedProduct} is not a directory or does not exist"
       return ${ERR_UNPACKING}
     fi
-
-    # cleanup list
-    rm list
 
   fi
 
@@ -312,7 +571,6 @@ function generate_full_res_tif (){
           #if it is neither like MTD_*.xml: return error
           [ $? -ne 0 ] && return $ERR_GETPRODMTD
       fi
-
       # create full resolution tif image with Red=B4 Green=B3 Blue=B2
       pconvert -b 4,3,2 -f tif -o ${OUTPUTDIR} ${s2_xml} &> /dev/null
       # check the exit code
@@ -321,11 +579,15 @@ function generate_full_res_tif (){
       outputfile=$(ls ${OUTPUTDIR} | egrep '^.*.tif$')
       tmp_outputfile="tmp_${outputfile}"
       mv ${OUTPUTDIR}/$outputfile ${OUTPUTDIR}/$tmp_outputfile
-
-      # gdalwarp -srcnodata 0 -dstnodata 0 -dstalpha -co "PHOTOMETRIC=RGB" -co "ALPHA=YES" -t_srs EPSG:3857 ${OUTPUTDIR}/$tmp_outputfile ${OUTPUTDIR}/$outputfile
-      gdalwarp -t_srs EPSG:3857 ${OUTPUTDIR}/$tmp_outputfile ${OUTPUTDIR}/$outputfile
+      gdal_translate -ot Byte -of GTiff -b 1 -b 2 -b 3 -scale -co "TILED=YES" -co "BLOCKXSIZE=512" -co "BLOCKYSIZE=512" -co "PHOTOMETRIC=RGB" -co "ALPHA=YES" ${OUTPUTDIR}/$tmp_outputfile temp-outputfile.tif
       returnCode=$?
       [ $returnCode -eq 0 ] || return ${ERR_CONVERT}
+
+      gdalwarp -ot Byte -t_srs EPSG:3857 -srcnodata 0 -dstnodata 0 -dstalpha -co "TILED=YES" -co "BLOCKXSIZE=512" -co "BLOCKYSIZE=512" -co "PHOTOMETRIC=RGB" -co "ALPHA=YES" temp-outputfile.tif ${OUTPUTDIR}/$outputfile
+      returnCode=$?
+      [ $returnCode -eq 0 ] || return ${ERR_CONVERT}
+      rm -f temp-outputfile.tif
+
       #Remove temporary file
       rm -f ${OUTPUTDIR}/$tmp_outputfile
       rm -f ${OUTPUTDIR}/*.xml
@@ -369,10 +631,15 @@ function generate_full_res_tif (){
 
 		ciop-log "INFO" "Apply reprojection and set alpha band"
 		cd ${retrievedProduct%/*}/temp
-		gdalwarp -srcnodata 0 -dstnodata 0 -dstalpha -co "PHOTOMETRIC=RGB" -co "ALPHA=YES" -co "COMPRESS=DEFLATE" -t_srs EPSG:3857 temp-rgb-outputfile.tif ${outputfile}
+		gdal_translate -ot Byte -of GTiff -b 1 -b 2 -b 3 -scale -co "TILED=YES" -co "BLOCKXSIZE=512" -co "BLOCKYSIZE=512" -co "PHOTOMETRIC=RGB" -co "ALPHA=YES" temp-rgb-outputfile.tif temp-outputfile.tif
+                returnCode=$?
+                [ $returnCode -eq 0 ] || return ${ERR_CONVERT}
+
+		gdalwarp -ot Byte -t_srs EPSG:3857 -srcnodata 0 -dstnodata 0 -dstalpha -co "TILED=YES" -co "BLOCKXSIZE=512" -co "BLOCKYSIZE=512" -co "PHOTOMETRIC=RGB" -co "ALPHA=YES" temp-outputfile.tif ${outputfile}
 		returnCode=$?
 		[ $returnCode -eq 0 ] || return ${ERR_CONVERT}		
-
+		# Remove temp files
+		rm -f temp-outputfile.tif
 		rm -f temp-rgb-outputfile.tif
 
 		#Add overviews
@@ -413,11 +680,18 @@ function generate_full_res_tif (){
 
 		cd - 2>/dev/null
 
+		ciop-log "INFO" "Apply reprojection and set alpha band"
 		cd ${retrievedProduct}/temp
-		gdalwarp -srcnodata 0 -dstnodata 0 -dstalpha -co "PHOTOMETRIC=RGB" -co "ALPHA=YES" -co "COMPRESS=DEFLATE" -t_srs EPSG:3857 temp-outputfile.tif ${outputfile}
+
+		gdal_translate -ot Byte -of GTiff -b 1 -b 2 -b 3 -scale -co "TILED=YES" -co "BLOCKXSIZE=512" -co "BLOCKYSIZE=512" -co "PHOTOMETRIC=RGB" -co "ALPHA=YES" temp-outputfile.tif temp-outputfile2.tif
+		returnCode=$?
+                [ $returnCode -eq 0 ] || return ${ERR_CONVERT}
+
+		gdalwarp -ot Byte -t_srs EPSG:3857 -srcnodata 0 -dstnodata 0 -dstalpha -co "TILED=YES" -co "BLOCKXSIZE=512" -co "BLOCKYSIZE=512" -co "PHOTOMETRIC=RGB" -co "ALPHA=YES" temp-outputfile2.tif ${outputfile}
 		returnCode=$?
 		[ $returnCode -eq 0 ] || return ${ERR_CONVERT}
 		rm -f temp-outputfile.tif 
+		rm -f temp-outputfile2.tif
 
 		#Add overviews
 		gdaladdo -r average ${outputfile} 2 4 8 16
@@ -455,10 +729,16 @@ function generate_full_res_tif (){
                 cd - 2>/dev/null
 
                 cd ${retrievedProduct}/temp
-                gdalwarp -srcnodata 0 -dstnodata 0 -dstalpha -co "PHOTOMETRIC=RGB" -co "ALPHA=YES" -co "COMPRESS=DEFLATE" -t_srs EPSG:3857 temp-outputfile.tif ${outputfile}
+                
+		gdal_translate -ot Byte -of GTiff -b 1 -b 2 -b 3 -scale -co "TILED=YES" -co "BLOCKXSIZE=512" -co "BLOCKYSIZE=512" -co "PHOTOMETRIC=RGB" -co "ALPHA=YES" temp-outputfile.tif temp-outputfile2.tif
+                returnCode=$?
+                [ $returnCode -eq 0 ] || return ${ERR_CONVERT}
+
+                gdalwarp -ot Byte -t_srs EPSG:3857 -srcnodata 0 -dstnodata 0 -dstalpha -co "TILED=YES" -co "BLOCKXSIZE=512" -co "BLOCKYSIZE=512" -co "PHOTOMETRIC=RGB" -co "ALPHA=YES" temp-outputfile2.tif ${outputfile}
                 returnCode=$?
                 [ $returnCode -eq 0 ] || return ${ERR_CONVERT}
                 rm -f temp-outputfile.tif
+                rm -f temp-outputfile2.tif
 
                 #Add overviews
                 gdaladdo -r average ${outputfile} 2 4 8 16
@@ -487,29 +767,68 @@ function generate_full_res_tif (){
 		outputfile="${pleiades_product##*/}"; outputfile="${outputfile%.JP2}.tif"
 
 		#Select RGB bands and convert to GeoTiff
-		gdal_translate -of GTiff -co "COMPRESS=JPEG" -b 1 -b 2 -b 3 ${pleiades_product} temp-outputfile.tif
+		gdal_translate -ot Byte -of GTiff -b 3 -b 2 -b 1 -scale -co "TILED=YES" -co "BLOCKXSIZE=512" -co "BLOCKYSIZE=512" -co "PHOTOMETRIC=RGB" -co "ALPHA=YES" ${pleiades_product} temp-outputfile.tif
 		returnCode=$?
 		[ $returnCode -eq 0 ] || return ${ERR_CONVERT}
 
-                gdalwarp -srcnodata 0 -dstnodata 0 -dstalpha -co "ALPHA=YES" -t_srs EPSG:3857 temp-outputfile.tif ${outputfile}
+		gdalwarp -ot Byte -t_srs EPSG:3857 -srcnodata 0 -dstnodata 0 -dstalpha -co "TILED=YES" -co "BLOCKXSIZE=512" -co "BLOCKYSIZE=512" -co "PHOTOMETRIC=RGB" -co "ALPHA=YES" temp-outputfile.tif ${outputfile} 
                 returnCode=$?
                 [ $returnCode -eq 0 ] || return ${ERR_CONVERT}
                 rm -f temp-outputfile.tif
 
-		# !!! %%%TO-DO%%% verify if overviews are needed and eventually investigate correct options for Tif with JPEG compression 
                 #Add overviews
-                #gdaladdo -r average ${outputfile} 2 4 8 16
-                #returnCode=$?
-                #[ $returnCode -eq 0 ] || return ${ERR_CONVERT}
+                gdaladdo -r average ${outputfile} 2 4 8 16
+                returnCode=$?
+                [ $returnCode -eq 0 ] || return ${ERR_CONVERT}
 
                 mv ${outputfile} ${OUTPUTDIR}/
 
                 cd - 2>/dev/null
         else
-                ciop-log "ERROR" "The retrieved KOMPSAT-3 product is not a directory"
+                ciop-log "ERROR" "The retrieved Pleiades product is not a directory"
                 return ${ERR_GETDATA}
         fi
   fi
+
+  if [ ${mission} = "SPOT-6" ] || [ ${mission} = "SPOT-7" ]; then
+        ciop-log "INFO" "Creating full resolution tif for ${mission} product"
+        if [[ -d "${retrievedProduct}" ]]; then
+                cd ${retrievedProduct}
+
+                #Get image file
+		find ${retrievedProduct}/ -name 'IMG_SPOT?_MS_*.JP2' > list
+      		for jp2prod in $(cat list);
+      		do
+		    # check if searched product exists 
+                    [[ -z "$jp2prod" ]] && return ${ERR_CONVERT}
+                    #set output filename
+                    outputfile="${jp2prod##*/}"; outputfile="${outputfile%.JP2}.tif"
+
+                    #Select RGB bands and convert to GeoTiff
+                    gdal_translate -ot Byte -of GTiff -b 3 -b 2 -b 1 -scale -co "TILED=YES" -co "BLOCKXSIZE=512" -co "BLOCKYSIZE=512" -co "PHOTOMETRIC=RGB" -co "ALPHA=YES" ${jp2prod} temp-outputfile.tif
+                    returnCode=$?
+                    [ $returnCode -eq 0 ] || return ${ERR_CONVERT}
+
+                    gdalwarp -ot Byte -t_srs EPSG:3857 -srcnodata 0 -dstnodata 0 -dstalpha -co "TILED=YES" -co "BLOCKXSIZE=512" -co "BLOCKYSIZE=512" -co "PHOTOMETRIC=RGB" -co "ALPHA=YES" temp-outputfile.tif ${outputfile}
+                    returnCode=$?
+                    [ $returnCode -eq 0 ] || return ${ERR_CONVERT}
+                    rm -f temp-outputfile.tif
+
+                    #Add overviews
+                    gdaladdo -r average ${outputfile} 2 4 8 16
+                    returnCode=$?
+                    [ $returnCode -eq 0 ] || return ${ERR_CONVERT}
+
+                    mv ${outputfile} ${OUTPUTDIR}/
+		done 
+
+                cd - 2>/dev/null
+        else
+                ciop-log "ERROR" "The retrieved ${mission} product is not a directory"
+                return ${ERR_GETDATA}
+        fi
+  fi
+
 
   if [[ "${mission}" == "Alos-2" ]]; then
 	ciop-log "INFO" "Creating full resolution tif for ALOS-2 product"
@@ -520,10 +839,30 @@ function generate_full_res_tif (){
 		cd ${retrievedProduct}
 		unzip $ALOS_ZIP
 		for img in *.tif ; do
-		   ciop-log "INFO" "Reporjecting ALOS-2 image: $img"
-		   gdalwarp -srcnodata 0 -dstnodata 0 -dstalpha -co "ALPHA=YES" -t_srs EPSG:3857 $img ${OUTPUTDIR}/${img}
+		   ciop-log "INFO" "Reprojecting "$mission" image: $img"
+                   gdalwarp -ot UInt16 -srcnodata 0 -dstnodata 0 -dstalpha -co "TILED=YES" -co "BLOCKXSIZE=512" -co "BLOCKYSIZE=512" -co "ALPHA=YES" -t_srs EPSG:3857 ${img} temp-outputfile.tif
+                   returnCode=$?
+                   [ $returnCode -eq 0 ] || return ${ERR_CONVERT}
+
+		   ciop-log "INFO" "Converting to dB "$mission" image: $img"
+		   #prepare snap request file for linear to dB conversion 
+   		   SNAP_REQUEST=$( create_snap_request_linear_to_dB "${retrievedProduct}/temp-outputfile.tif" "${retrievedProduct}/temp-outputfile2.tif" )
+   		   [ $? -eq 0 ] || return ${SNAP_REQUEST_ERROR}
+		   [ $DEBUG -eq 1 ] && cat ${SNAP_REQUEST}
+   		   # invoke the ESA SNAP toolbox
+   		   gpt ${SNAP_REQUEST} -c "${CACHE_SIZE}" &> /dev/null
+   		   # check the exit code
+   		   [ $? -eq 0 ] || return $ERR_SNAP
+			
+		   ciop-log "INFO" "Scaling and alpha band addition to "$mission" image: $img"
+		   gdal_translate -scale -ot Byte -co "TILED=YES" -co "BLOCKXSIZE=512" -co "BLOCKYSIZE=512" -co "ALPHA=YES" temp-outputfile2.tif temp-outputfile3.tif
+		   returnCode=$?
+                   [ $returnCode -eq 0 ] || return ${ERR_CONVERT}		   
+ 
+		   gdalwarp -ot Byte -srcnodata 0 -dstnodata 0 -dstalpha -co "TILED=YES" -co "BLOCKXSIZE=512" -co "BLOCKYSIZE=512" -co "ALPHA=YES" -t_srs EPSG:3857 temp-outputfile3.tif ${OUTPUTDIR}/${img}
 		   returnCode=$?
                    [ $returnCode -eq 0 ] || return ${ERR_CONVERT}
+                   rm -f temp-outputfile*
 
 		   gdaladdo -r average ${OUTPUTDIR}/${img} 2 4 8 16
 		   returnCode=$?
@@ -535,6 +874,7 @@ function generate_full_res_tif (){
 
   if [[ "${mission}" == "TerraSAR-X" ]]; then
 	ciop-log "INFO" "Creating full resolution tif for TerraSAR-X product"
+	IMAGEDATA=""
 	if [[ -d "${retrievedProduct}" ]]; then
 		#tsx_xml=$(find ${retrievedProduct}/ -name '*SAR*.xml' | head -1 | sed 's|^.*\/||')
 		IMAGEDATA=$(find ${retrievedProduct} -name 'IMAGEDATA')
@@ -542,38 +882,57 @@ function generate_full_res_tif (){
 			ciop-log "ERROR" "Failed to get IMAGEDATA dir"
 			return ${ERR_CONVERT}
 		fi
-		cd $IMAGEDATA
-		for img in *.tif ; do
-			gdalwarp -srcnodata 0 -dstnodata 0 -dstalpha -co "ALPHA=YES" -t_srs EPSG:3857 $img ${OUTPUTDIR}/${img}
-			returnCode=$?
-			[ $returnCode -eq 0 ] || return ${ERR_CONVERT}
-
-	                gdaladdo -r average ${OUTPUTDIR}/${img} 2 4 8 16
-        	        returnCode=$?
-                	[ $returnCode -eq 0 ] || return ${ERR_CONVERT}
-		done
-		cd -
 	elif [[ "${retrievedProduct##*.}" == "tar" ]]; then
-		mkdir temp
-		tar xf ${retrievedProduct} -C temp/
-		returnCode=$?
-		[ $returnCode -eq 0 ] || return ${ERR_CONVERT}
-		IMAGEDATA=$(find $PWD/temp/ -name 'IMAGEDATA')		
+                mkdir temp
+                tar xf ${retrievedProduct} -C temp/
+                returnCode=$?
+                [ $returnCode -eq 0 ] || return ${ERR_CONVERT}
+                IMAGEDATA=$(find $PWD/temp/ -name 'IMAGEDATA')
                 if [[ -z "$IMAGEDATA" ]]; then
                         ciop-log "ERROR" "Failed to get IMAGEDATA dir"
                         return ${ERR_CONVERT}
                 fi
-                cd $IMAGEDATA
-                for img in *.tif ; do
-                        gdalwarp -srcnodata 0 -dstnodata 0 -dstalpha -co "ALPHA=YES" -t_srs EPSG:3857 $img ${OUTPUTDIR}/${img}
-                        returnCode=$?
-                        [ $returnCode -eq 0 ] || return ${ERR_CONVERT}
+	fi
+	cd $IMAGEDATA
+	for img in *.tif ; do
+                ciop-log "INFO" "Reprojecting "$mission" image: $img"
+                gdalwarp -ot UInt16 -srcnodata 0 -dstnodata 0 -dstalpha -co "TILED=YES" -co "BLOCKXSIZE=512" -co "BLOCKYSIZE=512" -co "ALPHA=YES" -t_srs EPSG:3857 ${img} temp-outputfile.tif
+                returnCode=$?
+                [ $returnCode -eq 0 ] || return ${ERR_CONVERT}
 
-                        gdaladdo -r average ${OUTPUTDIR}/${img} 2 4 8 16
-                        returnCode=$?
-                        [ $returnCode -eq 0 ] || return ${ERR_CONVERT}
-                done
-                cd -
+                ciop-log "INFO" "Converting to dB "$mission" image: $img"
+                #prepare snap request file for linear to dB conversion
+                SNAP_REQUEST=$( create_snap_request_linear_to_dB "temp-outputfile.tif" "temp-outputfile2.tif" )
+                [ $? -eq 0 ] || return ${SNAP_REQUEST_ERROR}
+                [ $DEBUG -eq 1 ] && cat ${SNAP_REQUEST}
+                # invoke the ESA SNAP toolbox
+                gpt ${SNAP_REQUEST} -c "${CACHE_SIZE}" &> /dev/null
+                # check the exit code
+                [ $? -eq 0 ] || return $ERR_SNAP
+
+                ciop-log "INFO" "Scaling and alpha band addition to "$mission" image: $img"
+                #extract min max to avoid full white image issue
+                tiffProduct=temp-outputfile2.tif
+                sourceBandName=band_1
+                min_max=$( extract_min_max $tiffProduct $sourceBandName )
+                [ $? -eq 0 ] || return ${ERR_CONVERT}
+                # since min_max is like "minValue" "maxValue" these space separated strings can be directly given to gdal_translate
+                gdal_translate -scale ${min_max} -ot Byte -co "TILED=YES" -co "BLOCKXSIZE=512" -co "BLOCKYSIZE=512" -co "ALPHA=YES" temp-outputfile2.tif temp-outputfile3.tif
+                returnCode=$?
+                [ $returnCode -eq 0 ] || return ${ERR_CONVERT}
+
+                gdalwarp -ot Byte -srcnodata 0 -dstnodata 0 -dstalpha -co "TILED=YES" -co "BLOCKXSIZE=512" -co "BLOCKYSIZE=512" -co "ALPHA=YES" -t_srs EPSG:3857 temp-outputfile3.tif ${OUTPUTDIR}/${img}
+                returnCode=$?
+                [ $returnCode -eq 0 ] || return ${ERR_CONVERT}
+                rm -f temp-outputfile*
+
+                gdaladdo -r average ${OUTPUTDIR}/${img} 2 4 8 16
+                returnCode=$?
+                [ $returnCode -eq 0 ] || return ${ERR_CONVERT}
+		
+	done
+	cd -
+	if [[ "${retrievedProduct##*.}" == "tar" ]]; then
 		rm -rf temp
 	fi
   fi
@@ -584,10 +943,15 @@ function generate_full_res_tif (){
 		tif_file=$(find ${retrievedProduct} -name '*.tif')
 
 		ciop-log "INFO" "Processing Tiff file: $tif_file"
-
-		gdalwarp -srcnodata 0 -dstnodata 0 -dstalpha -co "ALPHA=YES" -t_srs EPSG:3857 $tif_file ${OUTPUTDIR}/${tif_file##*/}
+		
+		gdal_translate -ot Byte -of GTiff -b 1 -b 2 -b 3 -scale -co "TILED=YES" -co "BLOCKXSIZE=512" -co "BLOCKYSIZE=512" -co "PHOTOMETRIC=RGB" -co "ALPHA=YES" $tif_file temp-outputfile.tif
+		returnCode=$?
+                [ $returnCode -eq 0 ] || return ${ERR_CONVERT}
+			
+		gdalwarp -ot Byte -t_srs EPSG:3857 -srcnodata 0 -dstnodata 0 -dstalpha -co "TILED=YES" -co "BLOCKXSIZE=512" -co "BLOCKYSIZE=512" -co "PHOTOMETRIC=RGB" -co "ALPHA=YES" temp-outputfile.tif ${OUTPUTDIR}/${tif_file##*/}
 		returnCode=$?
 		[ $returnCode -eq 0 ] || return ${ERR_CONVERT}
+		rm -f temp-outputfile.tif
 
 		gdaladdo -r average ${OUTPUTDIR}/${tif_file##*/} 2 4 8 16
 		returnCode=$?
@@ -604,16 +968,22 @@ function generate_full_res_tif (){
 	tif_file=$(find ${retrievedProduct} -name '*.tiff')
 
 	ciop-log "INFO" "Processing Tiff file: $tif_file"
-	ciop-log "INFO" "Runing gdal_translate"
+	ciop-log "INFO" "Running gdal_translate"
 	outputfile=${tif_file##*/}; outputfile=${outputfile%.tiff}.tif
-	gdal_translate -of GTiff -co "PHOTOMETRIC=RGB" -b 3 -b 2 -b 1 $tif_file ${TMPDIR}/${outputfile}
+	gdal_translate -ot Byte -of GTiff -b 3 -b 2 -b 1 -scale -co "TILED=YES" -co "BLOCKXSIZE=512" -co "BLOCKYSIZE=512" -co "PHOTOMETRIC=RGB" -co "ALPHA=YES" $tif_file ${TMPDIR}/${outputfile}
 	returnCode=$?
 	[ $returnCode -eq 0 ] || return ${ERR_CONVERT}
 
-	ciop-log "INFO" "Runing gdalwarp"
-	gdalwarp -srcnodata 0 -dstnodata 0 -dstalpha -co "ALPHA=YES" -t_srs EPSG:3857 ${TMPDIR}/${outputfile} ${OUTPUTDIR}/${outputfile}
+	ciop-log "INFO" "Running gdalwarp"
+	gdalwarp -ot Byte -t_srs EPSG:3857 -srcnodata 0 -dstnodata 0 -dstalpha -co "TILED=YES" -co "BLOCKXSIZE=512" -co "BLOCKYSIZE=512" -co "PHOTOMETRIC=RGB" -co "ALPHA=YES" ${TMPDIR}/${outputfile} ${OUTPUTDIR}/${outputfile}
 	returnCode=$?
 	[ $returnCode -eq 0 ] || return ${ERR_CONVERT}
+	rm -f ${TMPDIR}/${outputfile}
+
+	gdaladdo -r average ${OUTPUTDIR}/${outputfile} 2 4 8 16
+        returnCode=$?
+        [ $returnCode -eq 0 ] || return ${ERR_CONVERT}
+
   fi
 
   if [[ "${mission}" == "Kanopus-V" ]]; then
@@ -624,14 +994,21 @@ function generate_full_res_tif (){
         ciop-log "INFO" "Processing Tiff file: $tif_file"
         ciop-log "INFO" "Runing gdal_translate"
         outputfile=${tif_file##*/}; outputfile=${outputfile%.tiff}.tif
-        gdal_translate -of GTiff -co "PHOTOMETRIC=RGB" -b 3 -b 2 -b 1 $tif_file ${TMPDIR}/${outputfile}
+        gdal_translate -ot Byte -of GTiff -b 3 -b 2 -b 1 -scale -co "TILED=YES" -co "BLOCKXSIZE=512" -co "BLOCKYSIZE=512" -co "PHOTOMETRIC=RGB" -co "ALPHA=YES" $tif_file ${TMPDIR}/${outputfile}
         returnCode=$?
         [ $returnCode -eq 0 ] || return ${ERR_CONVERT}
 
         ciop-log "INFO" "Runing gdalwarp"
-        gdalwarp -srcnodata 0 -dstnodata 0 -dstalpha -co "ALPHA=YES" -t_srs EPSG:3857 ${TMPDIR}/${outputfile} ${OUTPUTDIR}/${outputfile}
+        gdalwarp -ot Byte -t_srs EPSG:3857 -srcnodata 0 -dstnodata 0 -dstalpha -co "TILED=YES" -co "BLOCKXSIZE=512" -co "BLOCKYSIZE=512" -co "PHOTOMETRIC=RGB" -co "ALPHA=YES" ${TMPDIR}/${outputfile} ${OUTPUTDIR}/${outputfile}
         returnCode=$?
         [ $returnCode -eq 0 ] || return ${ERR_CONVERT}
+	rm -f ${TMPDIR}/${outputfile}
+	
+	gdaladdo -r average ${OUTPUTDIR}/${outputfile} 2 4 8 16
+        returnCode=$?
+        [ $returnCode -eq 0 ] || return ${ERR_CONVERT}
+
+ 
   fi
 
   return 0
@@ -639,6 +1016,182 @@ function generate_full_res_tif (){
 }
 
 
+function create_snap_request_linear_to_dB(){
+# function call: create_snap_request_linear_to_dB "${inputfileTIF}" "${outputfileTIF}" 
+
+# function which creates the actual request from
+# a template and returns the path to the request
+
+# get number of inputs
+inputNum=$#
+# check on number of inputs
+if [ "$inputNum" -ne "2" ] ; then
+    return ${SNAP_REQUEST_ERROR}
+fi
+
+local inputfileTIF=$1
+local outputfileTIF=$2
+
+#sets the output filename
+snap_request_filename="${TMPDIR}/$( uuidgen ).xml"
+
+cat << EOF > ${snap_request_filename}
+<graph id="Graph">
+  <version>1.0</version>
+  <node id="Read">
+    <operator>Read</operator>
+    <sources/>
+    <parameters class="com.bc.ceres.binding.dom.XppDomElement">
+      <file>${inputfileTIF}</file>
+    </parameters>
+  </node>
+  <node id="BandMaths">
+    <operator>BandMaths</operator>
+    <sources>
+      <sourceProduct refid="Read"/>
+    </sources>
+    <parameters class="com.bc.ceres.binding.dom.XppDomElement">
+      <targetBands>
+        <targetBand>
+          <name>band_1</name>
+          <type>float32</type>
+          <expression>20*log10(band_1)</expression>
+          <description/>
+          <unit/>
+          <noDataValue>0.0</noDataValue>
+        </targetBand>
+      </targetBands>
+      <variables/>
+    </parameters>
+  </node>
+  <node id="Write">
+    <operator>Write</operator>
+    <sources>
+      <sourceProduct refid="BandMaths"/>
+    </sources>
+    <parameters class="com.bc.ceres.binding.dom.XppDomElement">
+      <file>${outputfileTIF}</file>
+      <formatName>GeoTIFF-BigTIFF</formatName>
+    </parameters>
+  </node>
+  <applicationData id="Presentation">
+    <Description/>
+    <node id="Read">
+            <displayPosition x="37.0" y="134.0"/>
+    </node>
+    <node id="BandMaths">
+      <displayPosition x="247.0" y="132.0"/>
+    </node>
+    <node id="Write">
+            <displayPosition x="455.0" y="135.0"/>
+    </node>
+  </applicationData>
+</graph>
+EOF
+
+    [ $? -eq 0 ] && {
+        echo "${snap_request_filename}"
+        return 0
+    } || return ${SNAP_REQUEST_ERROR}
+
+}
+
+
+function create_snap_request_statsComputation(){
+# function call: create_snap_request_statsComputation $tiffProduct $sourceBandName $outputStatsFile
+    # get number of inputs
+    inputNum=$#
+    # check on number of inputs
+    if [ "$inputNum" -ne "3" ] ; then
+        return ${SNAP_REQUEST_ERROR}
+    fi
+
+    local tiffProduct=$1
+    local sourceBandName=$2
+    local outputStatsFile=$3
+
+    #sets the output filename
+    snap_request_filename="${TMPDIR}/$( uuidgen ).xml"
+
+   cat << EOF > ${snap_request_filename}
+<graph id="Graph">
+  <version>1.0</version>
+  <node id="StatisticsOp">
+    <operator>StatisticsOp</operator>
+    <sources>
+      <sourceProducts></sourceProducts>
+    </sources>
+    <parameters>
+      <sourceProductPaths>${tiffProduct}</sourceProductPaths>
+      <shapefile></shapefile>
+      <startDate></startDate>
+      <endDate></endDate>
+      <bandConfigurations>
+        <bandConfiguration>
+          <sourceBandName>${sourceBandName}</sourceBandName>
+          <expression></expression>
+          <validPixelExpression></validPixelExpression>
+        </bandConfiguration>
+      </bandConfigurations>
+      <outputShapefile></outputShapefile>
+      <outputAsciiFile>${outputStatsFile}</outputAsciiFile>
+      <percentiles>90,95</percentiles>
+      <accuracy>3</accuracy>
+    </parameters>
+  </node>
+</graph>
+EOF
+
+    [ $? -eq 0 ] && {
+        echo "${snap_request_filename}"
+        return 0
+    } || return ${SNAP_REQUEST_ERROR}
+
+}
+
+
+#function thta extract the min and max values from an input TIFF for the selected source band contained in it
+function extract_min_max(){
+# function call: extract_min_max $tiffProduct $sourceBandName 
+
+# get number of inputs
+inputNum=$#
+# check on number of inputs
+if [ "$inputNum" -ne "2" ] ; then
+    return ${SNAP_REQUEST_ERROR}
+fi
+
+local tiffProduct=$1
+local sourceBandName=$2
+# report activity in the log
+ciop-log "INFO" "Extracting min max from ${sourceBandName} contained in ${tiffProduct}"
+# Build statistics file name
+statsFile=${TMPDIR}/displacement.stats
+# prepare the SNAP request
+SNAP_REQUEST=$( create_snap_request_statsComputation "${tiffProduct}" "${sourceBandName}" "${statsFile}" )
+[ $? -eq 0 ] || return ${SNAP_REQUEST_ERROR}
+# report activity in the log
+ciop-log "INFO" "Generated request file: ${SNAP_REQUEST}"
+# report activity in the log
+ciop-log "INFO" "Invoking SNAP-gpt on the generated request file for statistics extraction"
+# invoke the ESA SNAP toolbox
+gpt $SNAP_REQUEST -c "${CACHE_SIZE}" &> /dev/null
+# check the exit code
+[ $? -eq 0 ] || return $ERR_SNAP
+
+# get maximum from stats file
+maximum=$(cat "${statsFile}" | grep world | tr '\t' ' ' | tr -s ' ' | cut -d ' ' -f 5)
+#get minimum from stats file
+minimum=$(cat "${statsFile}" | grep world | tr '\t' ' ' | tr -s ' ' | cut -d ' ' -f 7)
+
+rm ${statsFile}
+echo ${minimum} ${maximum}
+return 0
+
+}
+
+
+# main function
 function main() {
 
     #get input product list and convert it into an array
@@ -676,11 +1229,6 @@ function main() {
             cat ${TMPDIR}/ciop_copy.stderr
             return $ERR_NORETRIEVEDPROD
     	fi
-#	if [[ -d "$retrievedProduct" ]]; then 
-#		unzippedFolder=$(ls $retrievedProduct)	
-		# retrieved product pointing to the unzipped folder
-#        	retrievedProduct=$retrievedProduct/$unzippedFolder
-#	fi
     	prodname=$( basename "$retrievedProduct" )
 	# report activity in the log
     	ciop-log "INFO" "Product correctly retrieved: ${prodname}"
@@ -689,7 +1237,7 @@ function main() {
 
 	# report activity in the log
         ciop-log "INFO" "Retrieving mission identifier from product name"
-	mission=$( mission_prod_retrieval "${prodname}")
+	mission=$( mission_prod_retrieval "${retrievedProduct}")
         [ $? -eq 0 ] || return ${ERR_GETMISSION}
         # log the value, it helps debugging.
         # the log entry is available in the process stderr
@@ -700,7 +1248,7 @@ function main() {
 	# report activity in the log
         ciop-log "INFO" "Checking product type from product name"
         #get product type from product name
-        prodType=$( check_product_type "${prodname}" "${mission}" )
+        prodType=$( check_product_type "${retrievedProduct}" "${mission}" )
         returnCode=$?
 	[ $returnCode -eq 0 ] || return $returnCode
         # log the value, it helps debugging.
@@ -711,7 +1259,7 @@ function main() {
 	
 	# report activity in the log
         ciop-log "INFO" "Creating full resolution tif product(s) for ${prodname}"
-	generate_full_res_tif "${prodname}" "${mission}"
+	generate_full_res_tif "${retrievedProduct}" "${mission}"
 	returnCode=$?
         [ $returnCode -eq 0 ] || return $returnCode
         # Publish results 
