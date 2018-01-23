@@ -183,7 +183,7 @@ function check_product_type() {
 
   if [[ "${mission}" == "Resurs-P" ]]; then
 	### !!! TO-DO: update once reference Resurs-P info, doc and samples are provided !!! ###
-	prodTypeName="ResursP"
+	prodTypeName="Resurs-P"
   fi
 
   if [[ "${mission}" == "Kanopus-V" ]]; then
@@ -238,6 +238,7 @@ function mission_prod_retrieval(){
         prod_basename_substr_4=${prod_basename:0:4}
         prod_basename_substr_5=${prod_basename:0:5}
 	prod_basename_substr_9=${prod_basename:0:9}
+        prod_basename_substr_8=${prod_basename:0:8}
         [ "${prod_basename_substr_3}" = "S1A" ] && mission="Sentinel-1"
         [ "${prod_basename_substr_3}" = "S1B" ] && mission="Sentinel-1"
         [ "${prod_basename_substr_3}" = "S2A" ] && mission="Sentinel-2"
@@ -251,7 +252,7 @@ function mission_prod_retrieval(){
 	[ "${prod_basename_substr_5}" = "CHART" ] && mission="Pleiades"
         [ "${prod_basename_substr_5}" = "U2007" ] && mission="UK-DMC2"
 	[ "${prod_basename_substr_5}" = "ORTHO" ] && mission="UK-DMC2"
-        [ "${prod_basename}" = "Resurs-P" ] && mission="Resurs-P"
+        [ "${prod_basename_substr_8}" = "Resurs-P" ] && mission="Resurs-P"
         [ "${prod_basename_substr_9}" = "KANOPUS_V" ] && mission="Kanopus-V"
         alos2_test=$(echo "${prod_basename}" | grep "ALOS2")
         [[ -z "${alos2_test}" ]] && alos2_test=$(ls "${retrievedProduct}" | grep "ALOS2")
