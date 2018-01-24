@@ -2,9 +2,9 @@
 <project xmlns="http://maven.apache.org/POM/4.0.0" xmlns:xsi="http://www.w3.org/2001/XMLSchema-instance" xsi:schemaLocation="http://maven.apache.org/POM/4.0.0 http://maven.apache.org/maven-v4_0_0.xsd">
   <modelVersion>4.0.0</modelVersion>
   <groupId>com.terradue</groupId>
-  <artifactId>dcs-rss-fullres-mm-data-browser</artifactId>
+  <artifactId>dcs-rss-fullres</artifactId>
   <packaging>pom</packaging>
-  <name>dcs-rss-fullres-mm-data-browser</name>
+  <name>dcs-rss-fullres</name>
   <parent>
     <groupId>com.terradue</groupId>
     <artifactId>dcs-bash-parent</artifactId>
