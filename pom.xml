@@ -46,7 +46,10 @@
                 </goals>
                 <configuration>
                   <!-- Set here the dependencies installed with 'sudo yum install'-->
-                  <preinstallScriptlet>cd /tmp &amp;&amp; yumdownloader snap-5.0-1.el6 &amp;&amp; rpm -i snap-5.0-el6.x86_64.rpm &amp;&amp; rm -f snap-5.0-el6.x86_64.rpm</preinstallScriptlet>
+                  <preinstallScriptlet>
+                    <scriptFile>${project.build.directory}/src/preinstall.sh</scriptFile>
+                    <fileEncoding>utf-8</fileEncoding>
+                  </preinstallScriptlet>
                   <requires>
                  <!--   <require>snap = 5.0-1</require> -->
                     <require>gdal</require>
