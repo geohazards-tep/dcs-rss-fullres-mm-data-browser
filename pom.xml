@@ -47,7 +47,7 @@
                 <configuration>
                   <!-- Set here the dependencies installed with 'sudo yum install'-->
                   <requires>
-                    <require>snap &gt; 5.0-1</require>
+                    <require>snap = 5.0-1</require>
                     <require>gdal</require>
                     <require>gdal-python</require>
                   </requires>
