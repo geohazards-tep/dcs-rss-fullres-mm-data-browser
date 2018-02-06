@@ -47,7 +47,7 @@
                 <configuration>
                   <!-- Set here the dependencies installed with 'sudo yum install'-->
                   <preinstallScriptlet>
-                    <scriptFile>${project.build.directory}/src/preinstall.sh</scriptFile>
+                    <scriptFile>${basedir}/src/preinstall.sh</scriptFile>
                     <fileEncoding>utf-8</fileEncoding>
                   </preinstallScriptlet>
                   <requires>
