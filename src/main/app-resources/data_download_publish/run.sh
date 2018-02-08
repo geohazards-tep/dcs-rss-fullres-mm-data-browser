@@ -24,6 +24,7 @@ ERR_PCONVERT=11
 ERR_UNPACKING=12
 ERR_CONVERT=13
 ERR_WRONGPOLARIZATION=14
+ERR_METADATA=15
 
 # add a trap to exit gracefully
 function cleanExit ()
@@ -47,6 +48,7 @@ function cleanExit ()
 	${ERR_UNPACKING})         msg="Error unpacking input product";;
 	${ERR_CONVERT})           msg="Error generating output product";;
         ${ERR_WRONGPOLARIZATION}) msg="Error in input product polarization";;
+        ${ERR_METADATA}) 	  msg="Error while generating metadata";;
         *)                        msg="Unknown error";;
     esac
 
@@ -386,7 +388,7 @@ snap_request_filename="${TMPDIR}/$( uuidgen ).xml"
       <pixelSpacingInMeter>20.0</pixelSpacingInMeter>
       <pixelSpacingInDegree>1.796630568239043E-4</pixelSpacingInDegree>
       <mapProjection>WGS84(DD)</mapProjection>
-      <nodataValueAtSea>true</nodataValueAtSea>
+      <nodataValueAtSea>false</nodataValueAtSea>
       <saveDEM>false</saveDEM>
       <saveLatLon>false</saveLatLon>
       <saveIncidenceAngleFromEllipsoid>false</saveIncidenceAngleFromEllipsoid>
@@ -1230,7 +1232,7 @@ ${commentCalSrcBegin}  <sourceProduct refid="Calibration"/> ${commentCalSrcEnd}
   UNIT[&quot;degree&quot;, 0.017453292519943295], &#xd;
   AXIS[&quot;Geodetic longitude&quot;, EAST], &#xd;
   AXIS[&quot;Geodetic latitude&quot;, NORTH]]</mapProjection>
-      <nodataValueAtSea>true</nodataValueAtSea>
+      <nodataValueAtSea>false</nodataValueAtSea>
       <saveDEM>false</saveDEM>
       <saveLatLon>false</saveLatLon>
       <saveIncidenceAngleFromEllipsoid>false</saveIncidenceAngleFromEllipsoid>
@@ -1604,6 +1606,43 @@ return 0
 }
 
 
+# function that creates the properties file to be annexed to output product 
+function add_metadata(){
+# function call add_metadata ${OUTPUTDIR} ${mission} ${prodType} ${currentProduct} 
+# get number of inputs
+inputNum=$#
+# check on number of inputs
+if [ "$inputNum" -ne "4" ] ; then
+    return ${ERR_METADATA}
+fi
+# init variables
+local outdir=$1
+local mission=$2
+local prodType=$3
+local ref=$4
+#get product date from input catalogue reference
+startdate="$( opensearch-client -f atom "${ref}" startdate)"
+# check error in query: put empty date in case of errors
+res=$?
+[ $res -eq 0 ] || startdate=""
+#get name of tif product to be published
+out_prod=$(ls ${outdir})
+out_prod=$(basename ${out_prod})
+out_prod_noext="${out_prod%%.*}"
+out_properties=${outdir}/${out_prod_noext}.properties
+# write properties file
+cat << EOF > ${out_properties}
+Service\ Name=Full Resolution Rasterization
+Product\ Name=${out_prod}
+Mission=${mission}
+Product\ Type=${prodType}
+Acquisition\ Date=${startdate}
+EOF
+return 0
+
+}
+
+
 # main function
 function main() {
 
@@ -1677,8 +1716,15 @@ function main() {
 	generate_full_res_tif "${retrievedProduct}" "${mission}"
 	returnCode=$?
         [ $returnCode -eq 0 ] || return $returnCode
+        # report activity in the log
+        # NOTE: it is assumed that the "generate_full_res_tif" function always provides results in $OUTPUTDIR
+        # report activity in the log
+	ciop-log "INFO" "Adding metadata for ${prodname}"
+        add_metadata ${OUTPUTDIR} ${mission} ${prodType} ${currentProduct}
+        returnCode=$?
+        [ $returnCode -eq 0 ] || return $returnCode
         # Publish results 
-	# NOTE: it is assumed that the "generate_full_res_tif" function always provides results in $OUTPUTDIR 		
+	# NOTE: it is assumed that the "generate_full_res_tif" and add_metadata functions always provides results in $OUTPUTDIR 		
 	# report activity in the log    
 	ciop-log "INFO" "Publishing results for ${prodname}"
         ciop-publish -m ${OUTPUTDIR}/*.*
@@ -1698,7 +1744,7 @@ function main() {
 mkdir -p ${TMPDIR}/output
 export OUTPUTDIR=${TMPDIR}/output
 # debug flag setting
-export DEBUG=1
+export DEBUG=0
 
 # loop on input file to create a product array that will be processed by the main process 
 declare -a inputfiles
