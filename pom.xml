@@ -11,7 +11,7 @@
     <version>3.0.0-docker</version>
   </parent>
   <description>Multi-Mission Data Browser service for full resolution data visualisation.</description>
-  <version>1.4.0</version>
+  <version>1.5.1</version>
   <properties>
     <summary>Multi-Mission Data Browser service for full resolution data visualisation.</summary>
     <description>Multi-Mission Data Browser service for full resolution data visualisation.</description>
