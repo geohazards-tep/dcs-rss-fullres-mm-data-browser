@@ -7,6 +7,8 @@ source ${ciop_job_include}
 #export SNAP_HOME=$_CIOP_APPLICATION_PATH/common/snap
 #export PATH=${SNAP_HOME}/bin:${PATH}
 source $_CIOP_APPLICATION_PATH/gpt/snap_include.sh
+## put /opt/anaconda/bin ahead to the PATH list to ensure gdal to poit to the anaconda installation dir
+#export PATH=/opt/anaconda/bin:${PATH}
 
 # define the exit codes
 SUCCESS=0
@@ -66,14 +68,12 @@ function check_product_type() {
   local mission=$2
 
   if [ ${mission} = "Sentinel-1"  ] ; then
-      #productName assumed like S1A_IW_TTT* where TTT is the product type to be extracted
-      prodTypeName=$( echo ${productName:7:3} )
+      #productName assumed like S1A_IW_TTTT_* where TTTT is the product type to be extracted
+      prodTypeName=$( echo ${productName:7:4} )
       [ -z "${prodTypeName}" ] && return ${ERR_GETPRODTYPE}
-      # log the value, it helps debugging.
-      # the log entry is available in the process stderr
-      ciop-log "DEBUG" "Retrieved product type: ${prodTypeName}"
-      [ $prodTypeName != "GRD" ] && return $ERR_WRONGPRODTYPE
-
+      if [ $prodTypeName != "GRDH" ] && [ $prodTypeName != "GRDM" ]; then
+          return $ERR_WRONGPRODTYPE
+      fi
   fi
 
   if [ ${mission} = "Sentinel-2"  ] ; then
@@ -93,18 +93,32 @@ function check_product_type() {
       ciop-log "INFO" "Retrieving product type from Landsat 8 product: $filename"
       ciop-log "INFO" "Product extension : $ext"
       if [[ "$ext" == "tar.bz" ]]; then
-	ciop-log "INFO" "Running command: tar xjf $retrievedProduct ${filename%%.*}_MTL.txt" 
-        tar xjf $retrievedProduct ${filename%%.*}_MTL.txt
-	returnCode=$?
-	[ $returnCode -eq 0 ] || return ${ERR_UNPACKING}
-	[[ -e "${filename%%.*}_MTL.txt" ]] || return ${ERR_UNPACKING}
-	prodTypeName=$(sed -n -e 's|^.*DATA_TYPE.*\"\(.*\)\".*$|\1|p' ${filename%%.*}_MTL.txt)
-	rm -f ${filename%%.*}_MTL.txt
+          ciop-log "INFO" "Running command: tar xjf $retrievedProduct ${filename%%.*}_MTL.txt"
+          tar xjf $retrievedProduct ${filename%%.*}_MTL.txt
+          returnCode=$?
+          [ $returnCode -eq 0 ] || return ${ERR_GETPRODTYPE}
+          [[ -e "${filename%%.*}_MTL.txt" ]] || return ${ERR_GETPRODTYPE}
+          prodTypeName=$(sed -n -e 's|^.*DATA_TYPE.*\"\(.*\)\".*$|\1|p' ${filename%%.*}_MTL.txt)
+          rm -f ${filename%%.*}_MTL.txt
+      elif
+          [[ "$ext" == "tar" ]]; then
+          ciop-log "INFO" "Running command: tar xf $retrievedProduct *_MTL.txt"
+          tar xf $retrievedProduct *_MTL.txt
+          returnCode=$?
+          [ $returnCode -eq 0 ] || return ${ERR_GETPRODTYPE}
+          prodTypeName=$(sed -n -e 's|^.*DATA_TYPE.*\"\(.*\)\".*$|\1|p' *_MTL.txt)
+          rm -f *_MTL.txt
+      else
+          metadatafile=$(ls ${retrievedProduct}/vendor_metadata/*_MTL.txt)
+          [[ -e "${metadatafile}" ]] || return ${ERR_GETPRODTYPE}
+          prodTypeName=$(sed -n -e 's|^.*DATA_TYPE.*\"\(.*\)\".*$|\1|p' ${metadatafile})
       fi
-	
-      ciop-log "INFO" "Retrieved product type: ${prodTypeName}"
-      [[ "$prodTypeName" != "L1T" ]] && return $ERR_WRONGPRODTYPE
-
+      # log the value, it helps debugging.
+      # the log entry is available in the process stderr
+      ciop-log "DEBUG" "Retrieved product type: ${prodTypeName}"
+      if [[ "$prodTypeName" != "L1TP" ]] && [[ "$prodTypeName" != "L1T" ]]; then
+          return $ERR_WRONGPRODTYPE
+      fi
   fi
 
   if [ ${mission} = "Kompsat-2" ]; then
@@ -128,9 +142,11 @@ function check_product_type() {
   fi
 
   if [ ${mission} = "Pleiades" ]; then
-
-      ### !!!  %%TO-DO%% IDENTIFY pattern in the filename o contained metadata for product type check !!!!
-       prodTypeName="Pleiades"
+      # Get multispectral metadata file
+      metadatafile=$(find ${retrievedProduct}/ -name 'DIM_*MS_*.XML')
+      [[ -e "${metadatafile}" ]] || return ${ERR_GETPRODTYPE}
+      prodTypeName=$(sed -n -e 's|^.*<PROCESSING_LEVEL>\(.*\)</PROCESSING_LEVEL>$|\1|p' ${metadatafile})
+      [[ "$prodTypeName" != "ORTHO" ]] && return $ERR_WRONGPRODTYPE
   fi
 
   if [[ "${mission}" == "Alos-2" ]]; then
@@ -200,6 +216,55 @@ function check_product_type() {
       #naming convention <RS2_BeamMode_Date_Time_Polarizations_ProcessingLevel>
       prodTypeName=${prodname:(-3)}
       [[ "$prodTypeName" != "SGF" ]] && return $ERR_WRONGPRODTYPE    
+  fi
+
+  if [[ "${mission}" == "GF2" ]]; then
+      filename="${retrievedProduct##*/}"; ext="${filename#*.}"
+      # assumption is that the product has .tar extension
+      if  [[ "$ext" == "tar" ]]; then
+          ciop-log "INFO" "Running command: tar xf $retrievedProduct *MSS2.xml"
+          tar xf $retrievedProduct *MSS2.xml
+          returnCode=$?
+          [ $returnCode -eq 0 ] || return ${ERR_GETPRODTYPE}
+          prodTypeName=$(sed -n -e 's|^.*<ProductLevel>\(.*\)</ProductLevel>$|\1|p' *MSS2.xml)
+          rm -f *MSS2.xml
+      else
+	  ciop-log "ERROR" "Failed to get product type from : ${retrievedProduct}"
+	  ciop-log "ERROR" "Product extension not equal to the expected"
+          return $ERR_WRONGPRODTYPE
+      fi
+      [[ "$prodTypeName" != "LEVEL2A" ]] && return $ERR_WRONGPRODTYPE
+  fi
+  
+  if [[ "${mission}" == "RapidEye" ]]; then
+      # prodcut name assumed like TTTTTTT_DDDD-DD-DD_RE?_LL_HHHHHH
+      # where LL is the product level
+      prodTypeName=${prodname:23:2}
+      [[ "$prodTypeName" != "3A" ]] && return $ERR_WRONGPRODTYPE
+  fi
+
+  if [[ "${mission}" == "VRSS1" ]]; then
+      filename="${retrievedProduct##*/}"; ext="${filename#*.}"
+      # assumption is that the product has .tar extension or is already uncompressed
+      if  [[ "$ext" == "tar" ]]; then
+      # if tar uncompress the product 
+          ciop-log "INFO" "Running command: tar xf $retrievedProduct"
+          tar xf $retrievedProduct 
+          returnCode=$?
+          [ $returnCode -eq 0 ] || return ${ERR_GETPRODTYPE}
+          # find the fisrt band tif product 
+          vrss1_b1=$(find ./ -name '*_1.tif')
+          [[ "${vrss1_b1}" == "" ]] && return ${ERR_GETPRODTYPE}
+          dir_untar_vrss1=$(dirname ${vrss1_b1})
+          rm -r -f ${dir_untar_vrss1} 
+      else
+          vrss1_b1=$(find ${retrievedProduct}/ -name '*_1.tif')
+          [[ "${vrss1_b1}" == "" ]] && return ${ERR_GETPRODTYPE}
+      fi
+      # extract product type from product name
+      vrss1_b1=$(basename ${vrss1_b1})
+      l2b_test=$(echo "${vrss1_b1}" | grep "L2B")
+      [[ "${l2b_test}" != "" ]] && prodTypeName="L2B" ||  return $ERR_WRONGPRODTYPE
   fi
 
   echo ${prodTypeName}
@@ -274,7 +339,15 @@ function mission_prod_retrieval(){
 	[ "${prod_basename_substr_3}" = "SO_" ] && mission="TerraSAR-X"
 	[ "${prod_basename_substr_4}" = "dims" ] && mission="TerraSAR-X"
         [ "${prod_basename_substr_4}" = "RS2_" ] && mission="Radarsat-2"
-        
+	[ "${prod_basename_substr_3}" = "GF2" ] && mission="GF2"
+        rapideye_test=${prod_basename:19:2}
+        [ "${rapideye_test}" = "RE" ] && mission="RapidEye"
+        vrss1_test_1=$(echo "${prod_basename}" | grep "VRSS1")
+        vrss1_test_2=$(echo "${prod_basename}" | grep "VRSS-1")
+        if [[ "${vrss1_test_1}" != "" ]] || [[ "${vrss1_test_2}" != "" ]]; then
+	    mission="VRSS1"
+	fi
+
   	if [ "${mission}" != "" ] ; then
      	    echo ${mission}
   	else
@@ -302,20 +375,50 @@ function get_polarization_s1() {
   fi
 }
 
+# function that gets the Sentinel-1 acquisition mode from product name
+function get_s1_acq_mode(){
+# function call get_s1_acq_mode "${prodname}"
+local prodname=$1
+# filename convention assumed like S1A_AA_* where AA is the acquisition mode to be extracted
+acqMode=$( echo ${prodname:4:2} )
+echo ${acqMode}
+return 0
+}
+
 
 function create_snap_request_cal_ml_tc_db_scale_byte() {
 
-# function call  "${s1_manifest}" "${bandCoPol}"  "${outProd}"
+# function call create_snap_request_cal_ml_tc_db_scale_byte "${s1_manifest}" "${bandCoPol}" "${ml_factor}" "${pixelsize}" "${outProd}"
 
 # function which creates the actual request from
 # a template and returns the path to the request
 
 inputNum=$#
-[ "$inputNum" -ne 3 ] && return ${SNAP_REQUEST_ERROR}
+[ "$inputNum" -ne 5 ] && return ${SNAP_REQUEST_ERROR}
 
 local s1_manifest=$1
 local bandCoPol=$2
-local outProd=$3
+local ml_factor=$3
+local pixelsize=$4
+local outProd=$5
+
+local commentMlBegin=""
+local commentMlEnd=""
+local commentCalSrcBegin=""
+local commentCalSrcEnd=""
+
+local beginCommentXML="<!--"
+local endCommentXML="-->"
+# skip multilook operation if ml_factor=1
+if [ "$ml_factor" -eq 1 ] ; then
+    commentMlBegin="${beginCommentXML}"
+    commentMlEnd="${endCommentXML}"
+else
+    commentCalSrcBegin="${beginCommentXML}"
+    commentCalSrcEnd="${endCommentXML}"
+fi
+#compute pixel spacing according to the multilook factor
+pixelSpacing=$(echo "scale=1; $pixelsize*$ml_factor" | bc )
 #sets the output filename
 snap_request_filename="${TMPDIR}/$( uuidgen ).xml"
 
@@ -359,23 +462,24 @@ snap_request_filename="${TMPDIR}/$( uuidgen ).xml"
       <outputBetaBand>false</outputBetaBand>
     </parameters>
   </node>
-  <node id="Multilook">
+${commentMlBegin}  <node id="Multilook">
     <operator>Multilook</operator>
     <sources>
       <sourceProduct refid="Calibration"/>
     </sources>
     <parameters class="com.bc.ceres.binding.dom.XppDomElement">
       <sourceBands/>
-      <nRgLooks>2</nRgLooks>
-      <nAzLooks>2</nAzLooks>
+      <nRgLooks>${ml_factor}</nRgLooks>
+      <nAzLooks>${ml_factor}</nAzLooks>
       <outputIntensity>true</outputIntensity>
       <grSquarePixel>true</grSquarePixel>
     </parameters>
-  </node>
+  </node> ${commentMlEnd}
   <node id="Terrain-Correction">
     <operator>Terrain-Correction</operator>
     <sources>
-       <sourceProduct refid="Multilook"/> 
+${commentMlBegin}       <sourceProduct refid="Multilook"/> ${commentMlEnd}
+${commentCalSrcBegin}   <sourceProduct refid="Calibration"/>  ${commentCalSrcEnd}
     </sources>
     <parameters class="com.bc.ceres.binding.dom.XppDomElement">
       <sourceBands/>
@@ -385,8 +489,8 @@ snap_request_filename="${TMPDIR}/$( uuidgen ).xml"
       <externalDEMApplyEGM>true</externalDEMApplyEGM>
       <demResamplingMethod>BILINEAR_INTERPOLATION</demResamplingMethod>
       <imgResamplingMethod>BILINEAR_INTERPOLATION</imgResamplingMethod>
-      <pixelSpacingInMeter>20.0</pixelSpacingInMeter>
-      <pixelSpacingInDegree>1.796630568239043E-4</pixelSpacingInDegree>
+      <pixelSpacingInMeter>${pixelSpacing}</pixelSpacingInMeter>
+      <!-- <pixelSpacingInDegree>1.796630568239043E-4</pixelSpacingInDegree> -->
       <mapProjection>WGS84(DD)</mapProjection>
       <nodataValueAtSea>false</nodataValueAtSea>
       <saveDEM>false</saveDEM>
@@ -521,6 +625,7 @@ function generate_full_res_tif (){
       ciop-log "DEBUG" "s1_manifest ${s1_manifest}"
       polType=$( get_polarization_s1 "${productName}" )
       [[ $? -eq 0  ]] || return $?
+      # rasterization of on co-polarized channel
       case "$polType" in
           "SH")
               bandCoPol="Sigma0_HH_db"
@@ -535,10 +640,34 @@ function generate_full_res_tif (){
               bandCoPol="Sigma0_VV_db"
               ;;
       esac
+      # get product type
+      s1_prod_type=$( check_product_type "${retrievedProduct}" "${mission}" )
+      s1_acq_mode=$(get_s1_acq_mode "${productName}")
+      # default multilook factor = 2
+      ml_factor=2
+      # default pixel spacing = 20m
+      pixelsize=10
+      if [ "${s1_acq_mode}" == "EW" ]; then
+          if [ "${s1_prod_type}" == "GRDH" ]; then
+              pixelsize=25
+              ml_factor=1
+          elif [ "${s1_prod_type}" == "GRDM" ]; then
+              pixelsize=40
+              ml_factor=1
+          fi
+      elif [ "${s1_acq_mode}" == "IW" ]; then
+          if [ "${s1_prod_type}" == "GRDH" ]; then
+              pixelsize=10
+              ml_factor=2
+          elif [ "${s1_prod_type}" == "GRDM" ]; then
+              pixelsize=40
+              ml_factor=1
+          fi
+      fi
       outProd=${TMPDIR}/s1_cal_tc_db_co_pol
       outProdTIF=${outProd}.tif
       # prepare the SNAP request
-      SNAP_REQUEST=$( create_snap_request_cal_ml_tc_db_scale_byte "${s1_manifest}" "${bandCoPol}"  "${outProd}")
+      SNAP_REQUEST=$( create_snap_request_cal_ml_tc_db_scale_byte "${s1_manifest}" "${bandCoPol}" "${ml_factor}" "${pixelsize}" "${outProd}")
       [ $? -eq 0 ] || return ${SNAP_REQUEST_ERROR}
       [ $DEBUG -eq 1 ] && cat ${SNAP_REQUEST}
       # report activity in the log
@@ -605,63 +734,81 @@ function generate_full_res_tif (){
   fi
 
   if [ ${mission} = "Landsat-8" ]; then
+      #Check if downloaded product is compressed and extract it
+      ext="${retrievedProduct##*/}"; ext="${ext#*.}"
+      ciop-log "INFO" "Product extension is: $ext"
+      if [[ "$ext" == "tar.bz" ]]; then
+          ciop-log "INFO" "Extracting $retrievedProduct"
+          currentBasename=$(basename $retrievedProduct)
+          currentBasename="${currentBasename%%.*}"
+	  mkdir -p ${retrievedProduct%/*}/${currentBasename}
+          cd ${retrievedProduct%/*}
+          filename="${retrievedProduct##*/}" 
+	  tar xjf $filename -C ${currentBasename}
+          returnCode=$?
+          [ $returnCode -eq 0 ] || return ${ERR_UNPACKING}
+	  #Define output filename
+          prodname=${retrievedProduct%/*}/${currentBasename}
+          #Get RGB band filenames
+	  RED=$(ls "${prodname}"/LC8*_B4.TIF)
+	  GREEN=$(ls "${prodname}"/LC8*_B3.TIF)
+	  BLUE=$(ls "${prodname}"/LC8*_B2.TIF)
+       elif [[ "$ext" == "tar" ]]; then
+          ciop-log "INFO" "Extracting $retrievedProduct"
+          currentBasename=$(basename $retrievedProduct)
+          currentBasename="${currentBasename%%.*}"
+          mkdir -p ${retrievedProduct%/*}/${currentBasename}
+          cd ${retrievedProduct%/*}
+          filename="${retrievedProduct##*/}"
+          tar xf $filename -C ${currentBasename}
+          returnCode=$?
+          [ $returnCode -eq 0 ] || return ${ERR_UNPACKING}
+          prodname=${retrievedProduct%/*}/${currentBasename}
+          # in these particular case the product name is not common
+          # to the base band names ---> rename all bands
+          prodBasename=$(basename ${prodname})
+          for bix in 2 3 4;
+          do
+             currentTif=$(ls "${prodname}"/LC08*_B"${bix}".TIF)
+             mv ${currentTif} ${prodname}/${prodBasename}_B${bix}.TIF
+	  done
+          RED=$(ls "${prodname}"/${prodBasename}_B4.TIF) 
+          GREEN=$(ls "${prodname}"/${prodBasename}_B3.TIF)
+          BLUE=$(ls "${prodname}"/${prodBasename}_B2.TIF)
+      else
+          prodname=${retrievedProduct}
+          RED=$(ls "${prodname}"/LS08*_B04.TIF) 
+          GREEN=$(ls "${prodname}"/LS08*_B03.TIF) 
+          BLUE=$(ls "${prodname}"/LS08*_B02.TIF)
+      fi
+      ciop-log "INFO" "Generate RGB TIF from LANDSAT-8 TIF bands"
+      #define output filename
+      outputfile=$(basename ${prodname})
+      outputfile=${OUTPUTDIR}/${outputfile}.tif
+      #Merge RGB bands in a single GeoTiff		
+      gdal_merge.py -separate -n 0 -co "PHOTOMETRIC=RGB" -co "ALPHA=YES" ${RED} ${GREEN} ${BLUE} -o temp-rgb-outputfile.tif
+      returnCode=$?
+      [ $returnCode -eq 0 ] || return ${ERR_CONVERT}
 
-        #Check if downloaded product is compressed and extract it
-        ext="${retrievedProduct##*/}"; ext="${ext#*.}"
-	ciop-log "INFO" "Product extension is: $ext"
-        if [[ "$ext" == "tar.bz" ]]; then
-                ciop-log "INFO" "Extracting $retrievedProduct"
-		mkdir -p ${retrievedProduct%/*}/temp
-                cd ${retrievedProduct%/*}
-                filename="${retrievedProduct##*/}"
-                tar xjf $filename
-                returnCode=$?
-                [ $returnCode -eq 0 ] || return ${ERR_UNPACKING}
+      ciop-log "INFO" "Apply reprojection and set alpha band"
+      gdal_translate -ot Byte -of GTiff -b 1 -b 2 -b 3 -scale -co "TILED=YES" -co "BLOCKXSIZE=512" -co "BLOCKYSIZE=512" -co "PHOTOMETRIC=RGB" -co "ALPHA=YES" temp-rgb-outputfile.tif temp-outputfile.tif
+      returnCode=$?
+      [ $returnCode -eq 0 ] || return ${ERR_CONVERT}
 
-		#Define output filename
-		outputfile="${filename%%.*}.tif"
+      gdalwarp -ot Byte -t_srs EPSG:3857 -srcnodata 0 -dstnodata 0 -dstalpha -co "TILED=YES" -co "BLOCKXSIZE=512" -co "BLOCKYSIZE=512" -co "PHOTOMETRIC=RGB" -co "ALPHA=YES" temp-outputfile.tif ${outputfile}
+      returnCode=$?
+      [ $returnCode -eq 0 ] || return ${ERR_CONVERT}		
+      # Remove temp files
+      rm -f temp-outputfile.tif
+      rm -f temp-rgb-outputfile.tif
 
-		#Merge RGB bands in a single GeoTiff
-		ciop-log "INFO" "Generate RGB TIF from LANDSAT-8 TIF bands"
-		RED="${filename%%.*}_B4.TIF"
-		GREEN="${filename%%.*}_B3.TIF"
-		BLUE="${filename%%.*}_B2.TIF"
-		
-		gdal_merge.py -separate -n 0 -co "PHOTOMETRIC=RGB" -co "ALPHA=YES" ${RED} ${GREEN} ${BLUE} -o ${retrievedProduct%/*}/temp/temp-rgb-outputfile.tif
-		returnCode=$?
-		[ $returnCode -eq 0 ] || return ${ERR_CONVERT}
+      #Add overviews
+      gdaladdo -r average ${outputfile} 2 4 8 16
+      returnCode=$?
+      [ $returnCode -eq 0 ] || return ${ERR_CONVERT}
 
-		cd - 2>/dev/null
-
-		ciop-log "INFO" "Apply reprojection and set alpha band"
-		cd ${retrievedProduct%/*}/temp
-		gdal_translate -ot Byte -of GTiff -b 1 -b 2 -b 3 -scale -co "TILED=YES" -co "BLOCKXSIZE=512" -co "BLOCKYSIZE=512" -co "PHOTOMETRIC=RGB" -co "ALPHA=YES" temp-rgb-outputfile.tif temp-outputfile.tif
-                returnCode=$?
-                [ $returnCode -eq 0 ] || return ${ERR_CONVERT}
-
-		gdalwarp -ot Byte -t_srs EPSG:3857 -srcnodata 0 -dstnodata 0 -dstalpha -co "TILED=YES" -co "BLOCKXSIZE=512" -co "BLOCKYSIZE=512" -co "PHOTOMETRIC=RGB" -co "ALPHA=YES" temp-outputfile.tif ${outputfile}
-		returnCode=$?
-		[ $returnCode -eq 0 ] || return ${ERR_CONVERT}		
-		# Remove temp files
-		rm -f temp-outputfile.tif
-		rm -f temp-rgb-outputfile.tif
-
-		#Add overviews
-		gdaladdo -r average ${outputfile} 2 4 8 16
-		returnCode=$?
-		[ $returnCode -eq 0 ] || return ${ERR_CONVERT}
-
-		#Move output in output directory		
-		mv ${outputfile} ${OUTPUTDIR}/
-
-		cd - 2>/dev/null
-
-		#Clean temp files and dirs
-		rm -f ${retrievedProduct%/*}/*TIF 
-		rm -f ${retrievedProduct%/*}/temp/*
-		rmdir ${retrievedProduct%/*}/temp
-        fi
   fi
+  
 
   if [ ${mission} = "Kompsat-2" ]; then
 	if [[ -d "${retrievedProduct}" ]]; then
@@ -755,38 +902,39 @@ function generate_full_res_tif (){
   fi
 
   if [ ${mission} = "Pleiades" ]; then
-        if [[ -d "${retrievedProduct}" ]]; then
-                cd ${retrievedProduct}
+      if [[ -d "${retrievedProduct}" ]]; then
+          cd ${retrievedProduct}
+          
+          # Get multispectral image file
+	  pleiades_product=$(find ${retrievedProduct}/ -name 'IMG_*MS_*.JP2')
+	  [[ -z "$pleiades_product" ]] && return ${ERR_CONVERT}
 
-		#Get image file
-		pleiades_product=$(find ${retrievedProduct}/ -name 'IMG*.JP2')
-		[[ -z "$pleiades_product" ]] && return ${ERR_CONVERT}
+	  #set output filename
+	  outputfile="${pleiades_product##*/}"; outputfile="${outputfile%.JP2}.tif"
 
-		#set output filename
-		outputfile="${pleiades_product##*/}"; outputfile="${outputfile%.JP2}.tif"
+	  #Select RGB bands and convert to GeoTiff
+          [ $DEBUG -eq 1 ] && echo calling gdal_translate -ot Byte -of GTiff -b 3 -b 2 -b 1 -scale -co "TILED=YES" -co "BLOCKXSIZE=512" -co "BLOCKYSIZE=512" -co "PHOTOMETRIC=RGB" -co "ALPHA=YES" ${pleiades_product} temp-outputfile.tif
+	  gdal_translate -ot Byte -of GTiff -b 3 -b 2 -b 1 -scale -co "TILED=YES" -co "BLOCKXSIZE=512" -co "BLOCKYSIZE=512" -co "PHOTOMETRIC=RGB" -co "ALPHA=YES" ${pleiades_product} temp-outputfile.tif
+	  returnCode=$?
+	  [ $returnCode -eq 0 ] || return ${ERR_CONVERT}
 
-		#Select RGB bands and convert to GeoTiff
-		gdal_translate -ot Byte -of GTiff -b 3 -b 2 -b 1 -scale -co "TILED=YES" -co "BLOCKXSIZE=512" -co "BLOCKYSIZE=512" -co "PHOTOMETRIC=RGB" -co "ALPHA=YES" ${pleiades_product} temp-outputfile.tif
-		returnCode=$?
-		[ $returnCode -eq 0 ] || return ${ERR_CONVERT}
+	  gdalwarp -ot Byte -t_srs EPSG:3857 -srcnodata 0 -dstnodata 0 -dstalpha -co "TILED=YES" -co "BLOCKXSIZE=512" -co "BLOCKYSIZE=512" -co "PHOTOMETRIC=RGB" -co "ALPHA=YES" temp-outputfile.tif ${outputfile} 
+          returnCode=$?
+          [ $returnCode -eq 0 ] || return ${ERR_CONVERT}
+          rm -f temp-outputfile.tif
 
-		gdalwarp -ot Byte -t_srs EPSG:3857 -srcnodata 0 -dstnodata 0 -dstalpha -co "TILED=YES" -co "BLOCKXSIZE=512" -co "BLOCKYSIZE=512" -co "PHOTOMETRIC=RGB" -co "ALPHA=YES" temp-outputfile.tif ${outputfile} 
-                returnCode=$?
-                [ $returnCode -eq 0 ] || return ${ERR_CONVERT}
-                rm -f temp-outputfile.tif
+          #Add overviews
+          gdaladdo -r average ${outputfile} 2 4 8 16
+          returnCode=$?
+          [ $returnCode -eq 0 ] || return ${ERR_CONVERT}
 
-                #Add overviews
-                gdaladdo -r average ${outputfile} 2 4 8 16
-                returnCode=$?
-                [ $returnCode -eq 0 ] || return ${ERR_CONVERT}
+          mv ${outputfile} ${OUTPUTDIR}/
 
-                mv ${outputfile} ${OUTPUTDIR}/
-
-                cd - 2>/dev/null
-        else
-                ciop-log "ERROR" "The retrieved Pleiades product is not a directory"
-                return ${ERR_GETDATA}
-        fi
+          cd - 2>/dev/null
+      else
+          ciop-log "ERROR" "The retrieved Pleiades product is not a directory"
+          return ${ERR_GETDATA}
+      fi
   fi
 
   if [ ${mission} = "SPOT-6" ] || [ ${mission} = "SPOT-7" ]; then
@@ -1124,6 +1272,119 @@ function generate_full_res_tif (){
           ciop-log "ERROR" "The retrieved product ${retrievedProduct} is not a directory or does not exist"
           return ${ERR_UNPACKING}
       fi
+  fi
+
+
+  if [[ "${mission}" == "GF2" ]]; then
+      filename="${retrievedProduct##*/}"; ext="${filename#*.}"
+      # check extension, uncrompress and get product name
+      if [[ "$ext" == "tar" ]]; then
+          ciop-log "INFO" "Extracting $retrievedProduct"
+          currentBasename=$(basename $retrievedProduct)
+          currentBasename="${currentBasename%%.*}"
+          mkdir -p ${retrievedProduct%/*}/${currentBasename}
+          cd ${retrievedProduct%/*}
+          tar xf $filename -C ${currentBasename}
+          returnCode=$?
+          [ $returnCode -eq 0 ] || return ${ERR_UNPACKING}
+          prodname=${retrievedProduct%/*}/${currentBasename}
+          prodBasename=$(basename ${prodname})
+          # get multispectral tif product 
+          mss_product=$(ls "${prodname}"/*MSS2.tiff)
+      else
+          return ${ERR_GETDATA}
+      fi
+      # create full resolution tif image with Red=B3 Green=B2 Blue=B1
+      pconvert -b 3,2,1 -f tif -o ${OUTPUTDIR} ${mss_product} &> /dev/null
+      # check the exit code
+      [ $? -eq 0 ] || return $ERR_PCONVERT
+      # get output filename genarated by pconvert
+      pconvert_out=$(ls ${OUTPUTDIR} | egrep '^.*.tif$')
+      #define output filename
+      outputfile=${prodBasename}.tif
+      # run gdalwarp for product reprojection
+      gdalwarp -ot Byte -t_srs EPSG:3857 -srcalpha -dstalpha -co "TILED=YES" -co "BLOCKXSIZE=512" -co "BLOCKYSIZE=512" -co "PHOTOMETRIC=RGB" -co "ALPHA=YES" ${OUTPUTDIR}/$pconvert_out ${OUTPUTDIR}/$outputfile
+      returnCode=$?
+      [ $returnCode -eq 0 ] || return ${ERR_CONVERT}
+      #Remove temporary file
+      rm -f ${OUTPUTDIR}/$pconvert_out    
+      #Add overviews
+      gdaladdo -r average ${OUTPUTDIR}/$outputfile 2 4 8 16
+      returnCode=$?
+      [ $returnCode -eq 0 ] || return ${ERR_CONVERT}      
+  fi
+
+  if [[ "${mission}" == "RapidEye" ]]; then
+      tifProd=$(find ${retrievedProduct}/ -name ${productName}.tif)
+      [[ "${tifProd}" == "" ]] && return ${ERR_GETDATA}
+      # create full resolution tif image with Red=B3 Green=B2 Blue=B1
+      pconvert -b 3,2,1 -f tif -o ${TMPDIR} ${tifProd} &> /dev/null
+      # check the exit code
+      [ $? -eq 0 ] || return $ERR_PCONVERT
+      # get output filename genarated by pconvert
+      pconvert_out=${TMPDIR}/${productName}.tif
+      #define output filename
+      outputfile=${OUTPUTDIR}/${productName}.tif
+      # run gdalwarp for product reprojection
+      gdalwarp -ot Byte -t_srs EPSG:3857 -srcalpha -dstalpha -co "TILED=YES" -co "BLOCKXSIZE=512" -co "BLOCKYSIZE=512" -co "PHOTOMETRIC=RGB" -co "ALPHA=YES" ${pconvert_out} ${outputfile}      
+      returnCode=$?
+      [ $returnCode -eq 0 ] || return ${ERR_CONVERT}
+      #Remove temporary file
+      rm -f $pconvert_out
+      #Add overviews
+      gdaladdo -r average ${outputfile} 2 4 8 16
+      returnCode=$?
+      [ $returnCode -eq 0 ] || return ${ERR_CONVERT}
+  fi
+
+  if [[ "${mission}" == "VRSS1" ]]; then
+      filename="${retrievedProduct##*/}"; ext="${filename#*.}"
+      prod_dir=""
+      # assumption is that the product has .tar extension or is already uncompressed
+      if  [[ "$ext" == "tar" ]]; then
+      # if tar uncompress the product
+          ciop-log "INFO" "Running command: tar xf $retrievedProduct"
+          tar xf $retrievedProduct -C ${TMPDIR}
+          returnCode=$?
+          [ $returnCode -eq 0 ] || return ${ERR_GETDATA}
+          prod_dir=${TMPDIR}
+      else
+          #already uncrompressed
+          prod_dir=${retrievedProduct}
+      fi
+      # find the red band = B3
+      RED=$(find ${prod_dir}/ -name '*_3.tif')
+      [[ "${RED}" == "" ]] && return ${ERR_GETDATA}
+      # find the green band = B2
+      GREEN=$(find ${prod_dir}/ -name '*_2.tif')
+      [[ "${GREEN}" == "" ]] && return ${ERR_GETDATA}
+      # find the blue band = B1
+      BLUE=$(find ${prod_dir}/ -name '*_1.tif')
+      [[ "${BLUE}" == "" ]] && return ${ERR_GETDATA}
+      #define output filename
+      outputfile=$(basename ${BLUE} | sed -n -e 's|\(.*\)_1.tif|\1|p')
+      outputfile=${OUTPUTDIR}/${outputfile}.tif
+      #Merge RGB bands in a single GeoTiff
+      gdal_merge.py -separate -n 0 -co "PHOTOMETRIC=RGB" -co "ALPHA=YES" ${RED} ${GREEN} ${BLUE} -o temp-rgb-outputfile.tif
+      returnCode=$?
+      [ $returnCode -eq 0 ] || return ${ERR_CONVERT}
+
+      ciop-log "INFO" "Apply reprojection and set alpha band"
+      gdal_translate -ot Byte -of GTiff -b 1 -b 2 -b 3 -scale -co "TILED=YES" -co "BLOCKXSIZE=512" -co "BLOCKYSIZE=512" -co "PHOTOMETRIC=RGB" -co "ALPHA=YES" temp-rgb-outputfile.tif temp-outputfile.tif
+      returnCode=$?
+      [ $returnCode -eq 0 ] || return ${ERR_CONVERT}
+
+      gdalwarp -ot Byte -t_srs EPSG:3857 -srcnodata 0 -dstnodata 0 -dstalpha -co "TILED=YES" -co "BLOCKXSIZE=512" -co "BLOCKYSIZE=512" -co "PHOTOMETRIC=RGB" -co "ALPHA=YES" temp-outputfile.tif ${outputfile}
+      returnCode=$?
+      [ $returnCode -eq 0 ] || return ${ERR_CONVERT}
+      # Remove temp files
+      rm -f temp-outputfile.tif
+      rm -f temp-rgb-outputfile.tif
+
+      #Add overviews
+      gdaladdo -r average ${outputfile} 2 4 8 16
+      returnCode=$?
+      [ $returnCode -eq 0 ] || return ${ERR_CONVERT}    
   fi
 
   return 0
@@ -1620,11 +1881,21 @@ local outdir=$1
 local mission=$2
 local prodType=$3
 local ref=$4
-#get product date from input catalogue reference
+# get product date from input catalogue reference
 startdate="$( opensearch-client -f atom "${ref}" startdate)"
-# check error in query: put empty date in case of errors
+# check error in query: put empty value in case of errors
 res=$?
 [ $res -eq 0 ] || startdate=""
+#  get orbit direction from input catalogue reference
+orbitDirection="$( opensearch-client -f atom "${ref}" orbitDirection)"
+# check error in query: put empty value in case of errors
+res=$?
+[ $res -eq 0 ] || orbitDirection=""
+#  get track number from input catalogue reference
+track="$( opensearch-client -f atom "${ref}" track)"
+# check error in query: put empty value in case of errors
+res=$?
+[ $res -eq 0 ] || track=""
 #get name of tif product to be published
 out_prod=$(ls ${outdir})
 out_prod=$(basename ${out_prod})
@@ -1637,6 +1908,8 @@ Product\ Name=${out_prod}
 Mission=${mission}
 Product\ Type=${prodType}
 Acquisition\ Date=${startdate}
+Orbit\ Direction=${orbitDirection}
+Track\ Number=${track}
 EOF
 return 0
 
@@ -1659,7 +1932,7 @@ function main() {
     # the log entry is available in the process stderr
     ciop-log "DEBUG" "Number of input products: ${inputfilesNum}"
     let "inputfilesNum-=1"    
-    
+    [ $DEBUG -eq 1 ] && which gdal_translate    
     # loop on input product to generate and publish full res geotiff
     for prodIndex in `seq 0 $inputfilesNum`;
     do
