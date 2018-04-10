@@ -7,8 +7,8 @@ source ${ciop_job_include}
 #export SNAP_HOME=$_CIOP_APPLICATION_PATH/common/snap
 #export PATH=${SNAP_HOME}/bin:${PATH}
 source $_CIOP_APPLICATION_PATH/gpt/snap_include.sh
-## put /opt/anaconda/bin ahead to the PATH list to ensure gdal to poit to the anaconda installation dir
-#export PATH=/opt/anaconda/bin:${PATH}
+## put /opt/anaconda/bin ahead to the PATH list to ensure gdal to point to the anaconda installation dir
+export PATH=/opt/anaconda/bin:${PATH}
 
 # define the exit codes
 SUCCESS=0
@@ -129,14 +129,15 @@ function check_product_type() {
         ciop-log "ERROR" "KOMPSAT-2 product was not unzipped"
 	return ${ERR_UNPACKING}
       fi
-
+      # Only L1G are supported
       [[ "$prodTypeName" != "1G" ]] && return $ERR_WRONGPRODTYPE
   fi
 
   if [ ${mission} = "Kompsat-3" ]; then
       #naming convention K3_”Time”_”OrbNo”_"PassNo"_”ProcLevel”
-      prodTypeName=${prodname:(-3)}
-      if [[ "$prodTypeName" != "L1G" ]] ; then 
+      prodTypeName=${productName:(-3)}
+      # Only L1G is supported
+      if [[ "$prodTypeName" != "L1G" ]]; then 
           return $ERR_WRONGPRODTYPE
       fi
   fi
@@ -198,23 +199,23 @@ function check_product_type() {
 
   if [[ "${mission}" == "Resurs-P" ]]; then
 	### !!! TO-DO: update once reference Resurs-P info, doc and samples are provided !!! ###
-	prodTypeName="Resurs-P"
+	prodTypeName="MSS"
   fi
 
   if [[ "${mission}" == "Kanopus-V" ]]; then
-	prodTypeName=${prodname:10:3}
-	[[ "$prodTypeName" != "MSS" ]] && return $ERR_WRONGPRODTYPE
+        mss_test=$(echo "${productName}" | grep "MSS")
+	[[ "$mss_test" != "" ]] && prodTypeName="MSS"  || return $ERR_WRONGPRODTYPE
   fi
 
   if [[ "${mission}" == "Kompsat-5" ]]; then
         #naming convention <K5>_<YYYYMMDDhhmmss>_<tttttt>_<nnnnn>_<o>_<MM><SS>_<PP>_<LLL> where LLL is the processing level
-	prodTypeName=${prodname:47:3}
+	prodTypeName=${productName:47:3}
         [[ "$prodTypeName" != "L1D" ]] && return $ERR_WRONGPRODTYPE
   fi
 
   if [[ "${mission}" == "Radarsat-2" ]]; then
       #naming convention <RS2_BeamMode_Date_Time_Polarizations_ProcessingLevel>
-      prodTypeName=${prodname:(-3)}
+      prodTypeName=${productName:(-3)}
       [[ "$prodTypeName" != "SGF" ]] && return $ERR_WRONGPRODTYPE    
   fi
 
@@ -239,7 +240,7 @@ function check_product_type() {
   if [[ "${mission}" == "RapidEye" ]]; then
       # prodcut name assumed like TTTTTTT_DDDD-DD-DD_RE?_LL_HHHHHH
       # where LL is the product level
-      prodTypeName=${prodname:23:2}
+      prodTypeName=${productName:23:2}
       [[ "$prodTypeName" != "3A" ]] && return $ERR_WRONGPRODTYPE
   fi
 
@@ -325,8 +326,12 @@ function mission_prod_retrieval(){
 	[ "${prod_basename_substr_5}" = "ORTHO" ] && mission="UK-DMC2"
         ukdmc2_test=$(echo "${prod_basename}" | grep "UK-DMC-2")
         [ "${ukdmc2_test}" = "" ] || mission="UK-DMC-2"
-        [ "${prod_basename_substr_8}" = "Resurs-P" ] && mission="Resurs-P"
-        [ "${prod_basename_substr_9}" = "KANOPUS_V" ] && mission="Kanopus-V"
+        if [[ "${prod_basename_substr_8}" == "RESURS_P" ]] || [[ "${prod_basename_substr_8}" == "RESURS-P" ]] ; then
+            mission="Resurs-P"
+        fi
+        if [[ "${prod_basename_substr_9}" == "KANOPUS_V" ]] || [[ "${prod_basename_substr_9}" == "KANOPUS-V" ]]; then 
+            mission="Kanopus-V"
+        fi
         alos2_test=$(echo "${prod_basename}" | grep "ALOS2")
         [[ -z "${alos2_test}" ]] && alos2_test=$(ls "${retrievedProduct}" | grep "ALOS2")
         [ "${alos2_test}" = "" ] || mission="Alos-2"
@@ -432,21 +437,10 @@ snap_request_filename="${TMPDIR}/$( uuidgen ).xml"
       <file>${s1_manifest}</file>
     </parameters>
   </node>
-  <node id="Remove-GRD-Border-Noise">
-    <operator>Remove-GRD-Border-Noise</operator>
-    <sources>
-      <sourceProduct refid="Read"/>
-    </sources>
-    <parameters class="com.bc.ceres.binding.dom.XppDomElement">
-      <selectedPolarisations/>
-      <borderLimit>1000</borderLimit>
-      <trimThreshold>0.5</trimThreshold>
-    </parameters>
-  </node>
   <node id="Calibration">
     <operator>Calibration</operator>
     <sources>
-      <sourceProduct refid="Remove-GRD-Border-Noise"/>
+      <sourceProduct refid="Read"/>
     </sources>
     <parameters class="com.bc.ceres.binding.dom.XppDomElement">
       <sourceBands/>
@@ -914,11 +908,11 @@ function generate_full_res_tif (){
 
 	  #Select RGB bands and convert to GeoTiff
           [ $DEBUG -eq 1 ] && echo calling gdal_translate -ot Byte -of GTiff -b 3 -b 2 -b 1 -scale -co "TILED=YES" -co "BLOCKXSIZE=512" -co "BLOCKYSIZE=512" -co "PHOTOMETRIC=RGB" -co "ALPHA=YES" ${pleiades_product} temp-outputfile.tif
-	  gdal_translate -ot Byte -of GTiff -b 3 -b 2 -b 1 -scale -co "TILED=YES" -co "BLOCKXSIZE=512" -co "BLOCKYSIZE=512" -co "PHOTOMETRIC=RGB" -co "ALPHA=YES" ${pleiades_product} temp-outputfile.tif
+	  gdal_translate -ot Byte -of GTiff -b 3 -b 2 -b 1 -scale -co "TILED=YES" -co "BLOCKXSIZE=512" -co "BLOCKYSIZE=512" -co "PHOTOMETRIC=RGB" -co "ALPHA=YES" -co "BIGTIFF=YES" ${pleiades_product} temp-outputfile.tif
 	  returnCode=$?
 	  [ $returnCode -eq 0 ] || return ${ERR_CONVERT}
 
-	  gdalwarp -ot Byte -t_srs EPSG:3857 -srcnodata 0 -dstnodata 0 -dstalpha -co "TILED=YES" -co "BLOCKXSIZE=512" -co "BLOCKYSIZE=512" -co "PHOTOMETRIC=RGB" -co "ALPHA=YES" temp-outputfile.tif ${outputfile} 
+	  gdalwarp -ot Byte -t_srs EPSG:3857 -srcnodata 0 -dstnodata 0 -dstalpha -co "TILED=YES" -co "BLOCKXSIZE=512" -co "BLOCKYSIZE=512" -co "PHOTOMETRIC=RGB" -co "ALPHA=YES" -co "BIGTIFF=YES" temp-outputfile.tif ${outputfile} 
           returnCode=$?
           [ $returnCode -eq 0 ] || return ${ERR_CONVERT}
           rm -f temp-outputfile.tif
@@ -1842,7 +1836,7 @@ local pc_csv_list=${pc1},${pc2}
 # report activity in the log
 ciop-log "INFO" "Extracting percentiles ${pc1} and ${pc2} from ${sourceBandName} contained in ${tiffProduct}"
 # Build statistics file name
-statsFile=${TMPDIR}/displacement.stats
+statsFile=${TMPDIR}/temp.stats
 # prepare the SNAP request
 SNAP_REQUEST=$( create_snap_request_statsComputation "${tiffProduct}" "${sourceBandName}" "${statsFile}" "${pc_csv_list}" )
 [ $? -eq 0 ] || return ${SNAP_REQUEST_ERROR}
