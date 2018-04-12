@@ -11,7 +11,7 @@
     <version>2.0.0</version>
   </parent>
   <description>Multi-Mission Data Browser service for full resolution data visualisation.</description>
-  <version>1.9.0-SNAPSHOT</version>
+  <version>1.9.1-SNAPSHOT</version>
   <properties>
     <summary>Multi-Mission Data Browser service for full resolution data visualisation.</summary>
     <description>Multi-Mission Data Browser service for full resolution data visualisation.</description>
@@ -52,6 +52,7 @@
                     <require>gdal-python</require>
                     <require>miniconda</require>
                     <require>openjpeg2</require>
+                    <require>proj-devel</require>
                   </requires>
                   <postinstallScriptlet combine.self="override">
                     <script>conda update conda -y &amp;&amp; conda install --file /application/dependencies/python/packages.list</script>
