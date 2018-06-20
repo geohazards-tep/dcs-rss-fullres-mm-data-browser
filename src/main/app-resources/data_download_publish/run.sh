@@ -4,9 +4,9 @@
 source ${ciop_job_include}
 
 # set the environment variables to use ESA SNAP toolbox
-#export SNAP_HOME=$_CIOP_APPLICATION_PATH/common/snap
-#export PATH=${SNAP_HOME}/bin:${PATH}
 source $_CIOP_APPLICATION_PATH/gpt/snap_include.sh
+# set the environment variables to use ORFEO toolbox
+source $_CIOP_APPLICATION_PATH/otb/otb_include.sh
 ## put /opt/anaconda/bin ahead to the PATH list to ensure gdal to point to the anaconda installation dir
 export PATH=/opt/anaconda/bin:${PATH}
 
@@ -27,6 +27,7 @@ ERR_UNPACKING=12
 ERR_CONVERT=13
 ERR_WRONGPOLARIZATION=14
 ERR_METADATA=15
+ERR_OTB=16
 
 # add a trap to exit gracefully
 function cleanExit ()
@@ -51,6 +52,7 @@ function cleanExit ()
 	${ERR_CONVERT})           msg="Error generating output product";;
         ${ERR_WRONGPOLARIZATION}) msg="Error in input product polarization";;
         ${ERR_METADATA}) 	  msg="Error while generating metadata";;
+        ${ERR_OTB})          	  msg="Orfeo Toolbox failed to process";;
         *)                        msg="Unknown error";;
     esac
 
@@ -437,10 +439,21 @@ snap_request_filename="${TMPDIR}/$( uuidgen ).xml"
       <file>${s1_manifest}</file>
     </parameters>
   </node>
+  <node id="Remove-GRD-Border-Noise">
+    <operator>Remove-GRD-Border-Noise</operator>
+    <sources>
+      <sourceProduct refid="Read"/>
+    </sources>
+    <parameters class="com.bc.ceres.binding.dom.XppDomElement">
+      <selectedPolarisations/>
+      <borderLimit>1000</borderLimit>
+      <trimThreshold>0.5</trimThreshold>
+    </parameters>
+  </node>
   <node id="Calibration">
     <operator>Calibration</operator>
     <sources>
-      <sourceProduct refid="Read"/>
+      <sourceProduct refid="Remove-GRD-Border-Noise"/>
     </sources>
     <parameters class="com.bc.ceres.binding.dom.XppDomElement">
       <sourceBands/>
@@ -690,40 +703,56 @@ function generate_full_res_tif (){
   fi
 
   if [ ${mission} = "Sentinel-2"  ] ; then
-      #get full path of S2 product metadata xml file
-      # check if it is like S2?_*.xml
-      # s2_xml=$(ls "${retrievedProduct}"/S2?_*.xml )
-      s2_xml=$(find ${retrievedProduct}/ -name '*.xml' | egrep '^.*/S2[A-Z]?_.*.SAFE/S2[A-Z]?_[A-Z0-9]*.xml$') 
-      # if it not like S2?_*.xml
+      # output product name
+      outputProd=$(basename ${retrievedProduct}) 
+      # try to get path of True Color Image file
+      tci=$(find ${retrievedProduct}/ -name '*.jp2' | egrep '*_TCI.jp2$')
+      #if not found then go to backup solution: make image using R=B4 G=B3 B=B2 
       if [ $? -ne 0 ] ; then
-          # check if it is like MTD_*.xml
-          #s2_xml=$(ls "${retrievedProduct}"/MTD_*.xml )
-          s2_xml=$(find ${retrievedProduct}/ -name '*.xml' | egrep '^.*/S2[A-Z]?_.*.SAFE/MTD_[A-Z0-9]*.xml$')
-          #if it is neither like MTD_*.xml: return error
-          [ $? -ne 0 ] && return $ERR_GETPRODMTD
-      fi
-      # create full resolution tif image with Red=B4 Green=B3 Blue=B2
-      pconvert -b 4,3,2 -f tif -o ${OUTPUTDIR} ${s2_xml} &> /dev/null
-      # check the exit code
-      [ $? -eq 0 ] || return $ERR_PCONVERT
-
-      outputfile=$(ls ${OUTPUTDIR} | egrep '^.*.tif$')
-      tmp_outputfile="tmp_${outputfile}"
-      mv ${OUTPUTDIR}/$outputfile ${OUTPUTDIR}/$tmp_outputfile
-      
-      gdalwarp -ot Byte -t_srs EPSG:3857 -srcalpha -dstalpha -co "TILED=YES" -co "BLOCKXSIZE=512" -co "BLOCKYSIZE=512" -co "PHOTOMETRIC=RGB" -co "ALPHA=YES" ${OUTPUTDIR}/$tmp_outputfile ${OUTPUTDIR}/$outputfile
-      returnCode=$?
-      [ $returnCode -eq 0 ] || return ${ERR_CONVERT}
-      #rm -f temp-outputfile.tif
-
-      #Remove temporary file
-      rm -f ${OUTPUTDIR}/$tmp_outputfile
-      rm -f ${OUTPUTDIR}/*.xml
-
-      #Add overviews
-      gdaladdo -r average ${OUTPUTDIR}/$outputfile 2 4 8 16
-      returnCode=$?
-      [ $returnCode -eq 0 ] || return ${ERR_CONVERT}            
+          #get full path of S2 product metadata xml file
+          # check if it is like S2?_*.xml
+          s2_xml=$(find ${retrievedProduct}/ -name '*.xml' | egrep '^.*/S2[A-Z]?_.*.SAFE/S2[A-Z]?_[A-Z0-9]*.xml$') 
+          # if it not like S2?_*.xml
+          if [ $? -ne 0 ] ; then
+              # check if it is like MTD_*.xml
+              s2_xml=$(find ${retrievedProduct}/ -name '*.xml' | egrep '^.*/S2[A-Z]?_.*.SAFE/MTD_[A-Z0-9]*.xml$')
+              #if it is neither like MTD_*.xml: return error
+              [ $? -ne 0 ] && return $ERR_GETPRODMTD
+          fi
+          # create full resolution tif image with Red=B4 Green=B3 Blue=B2
+          pconvert -b 4,3,2 -f tif -o ${OUTPUTDIR} ${s2_xml} &> /dev/null
+          # check the exit code
+          [ $? -eq 0 ] || return $ERR_PCONVERT
+          # get pconvert output file 
+          outputfile=$(ls ${OUTPUTDIR} | egrep '^.*.tif$')
+          # since pconvert out is not the final product to be published, rename and move it to temp folder
+          tmp_outputfile="tmp_${outputfile}"
+      	  mv ${OUTPUTDIR}/$outputfile ${OUTPUTDIR}/$tmp_outputfile
+          # re-projection
+          gdalwarp -ot Byte -t_srs EPSG:3857 -srcalpha -dstalpha -co "TILED=YES" -co "BLOCKXSIZE=512" -co "BLOCKYSIZE=512" -co "PHOTOMETRIC=RGB" -co "ALPHA=YES" ${OUTPUTDIR}/$tmp_outputfile ${OUTPUTDIR}/$outputfile
+          returnCode=$?
+          [ $returnCode -eq 0 ] || return ${ERR_CONVERT}
+          #Remove temporary file
+          rm -f ${OUTPUTDIR}/$tmp_outputfile
+          rm -f ${OUTPUTDIR}/*.xml
+          #Add overviews
+          gdaladdo -r average ${OUTPUTDIR}/$outputfile 2 4 8 16
+          returnCode=$?
+          [ $returnCode -eq 0 ] || return ${ERR_CONVERT}
+      else
+          # translate the jp2 file in GeoTIFF
+          gdal_translate -ot Byte -of GTiff -b 1 -b 2 -b 3 -scale -co "TILED=YES" -co "BLOCKXSIZE=512" -co "BLOCKYSIZE=512" -co "PHOTOMETRIC=RGB" -co "ALPHA=YES" ${tci} temp-outputfile.tif
+          #re-projection
+          gdalwarp -ot Byte -t_srs EPSG:3857 -srcnodata 0 -dstnodata 0 -dstalpha -co "TILED=YES" -co "BLOCKXSIZE=512" -co "BLOCKYSIZE=512" -co "PHOTOMETRIC=RGB" -co "ALPHA=YES" temp-outputfile.tif ${OUTPUTDIR}/${outputProd}.tif
+          returnCode=$?
+          [ $returnCode -eq 0 ] || return ${ERR_CONVERT}
+          #Remove temporary file
+          rm -f temp-outputfile.tif
+          #Add overviews
+          gdaladdo -r average ${OUTPUTDIR}/${outputProd}.tif 2 4 8 16
+          returnCode=$?
+          [ $returnCode -eq 0 ] || return ${ERR_CONVERT}
+      fi             
 
   fi
 
@@ -905,25 +934,27 @@ function generate_full_res_tif (){
 
 	  #set output filename
 	  outputfile="${pleiades_product##*/}"; outputfile="${outputfile%.JP2}.tif"
-
-	  #Select RGB bands and convert to GeoTiff
-          [ $DEBUG -eq 1 ] && echo calling gdal_translate -ot Byte -of GTiff -b 3 -b 2 -b 1 -scale -co "TILED=YES" -co "BLOCKXSIZE=512" -co "BLOCKYSIZE=512" -co "PHOTOMETRIC=RGB" -co "ALPHA=YES" ${pleiades_product} temp-outputfile.tif
-	  gdal_translate -ot Byte -of GTiff -b 3 -b 2 -b 1 -scale -co "TILED=YES" -co "BLOCKXSIZE=512" -co "BLOCKYSIZE=512" -co "PHOTOMETRIC=RGB" -co "ALPHA=YES" -co "BIGTIFF=YES" ${pleiades_product} temp-outputfile.tif
-	  returnCode=$?
-	  [ $returnCode -eq 0 ] || return ${ERR_CONVERT}
-
-	  gdalwarp -ot Byte -t_srs EPSG:3857 -srcnodata 0 -dstnodata 0 -dstalpha -co "TILED=YES" -co "BLOCKXSIZE=512" -co "BLOCKYSIZE=512" -co "PHOTOMETRIC=RGB" -co "ALPHA=YES" -co "BIGTIFF=YES" temp-outputfile.tif ${outputfile} 
+          #run OTB optical calibration
+          otbcli_OpticalCalibration -in ${pleiades_product} -out temp-outputfile.tif -ram ${RAM_AVAILABLE}
+          returnCode=$?
+          [ $returnCode -eq 0 ] || return ${ERR_OTB}
+          # run pconvert to scale with percetile 2 and 96
+          pconvert -b 3,2,1 -f tif -o ${TMPDIR} temp-outputfile.tif
+          # check the exit code
+          [ $? -eq 0 ] || return $ERR_PCONVERT
+          # re-projection
+          gdalwarp -ot Byte -t_srs EPSG:3857 -srcalpha -dstalpha -co "TILED=YES" -co "BLOCKXSIZE=512" -co "BLOCKYSIZE=512" -co "PHOTOMETRIC=RGB" -co "ALPHA=YES" ${TMPDIR}/temp-outputfile.tif ${outputfile}
           returnCode=$?
           [ $returnCode -eq 0 ] || return ${ERR_CONVERT}
-          rm -f temp-outputfile.tif
-
           #Add overviews
           gdaladdo -r average ${outputfile} 2 4 8 16
           returnCode=$?
           [ $returnCode -eq 0 ] || return ${ERR_CONVERT}
-
+          # remove temp files
+          rm temp-outputfile.tif ${TMPDIR}/temp-outputfile.tif
+          # move result to output folder
           mv ${outputfile} ${OUTPUTDIR}/
-
+          
           cd - 2>/dev/null
       else
           ciop-log "ERROR" "The retrieved Pleiades product is not a directory"
@@ -1927,6 +1958,7 @@ function main() {
     ciop-log "DEBUG" "Number of input products: ${inputfilesNum}"
     let "inputfilesNum-=1"    
     [ $DEBUG -eq 1 ] && which gdal_translate    
+    [ $DEBUG -eq 1 ] && ls -l ${SNAP_HOME}
     # loop on input product to generate and publish full res geotiff
     for prodIndex in `seq 0 $inputfilesNum`;
     do

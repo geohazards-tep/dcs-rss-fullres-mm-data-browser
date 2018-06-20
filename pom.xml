@@ -11,7 +11,7 @@
     <version>3.0.0-docker</version>
   </parent>
   <description>Multi-Mission Data Browser service for full resolution data visualisation.</description>
-  <version>1.9.1</version>
+  <version>1.9.3</version>
   <properties>
     <summary>Multi-Mission Data Browser service for full resolution data visualisation.</summary>
     <description>Multi-Mission Data Browser service for full resolution data visualisation.</description>
@@ -47,12 +47,13 @@
                 <configuration>
                   <!-- Set here the dependencies installed with 'sudo yum install'-->
                   <requires>
-                    <require>snap = 5.0-1.el6</require>
+                    <require>snap6</require>
                     <require>gdal</require>
                     <require>gdal-python</require>
                     <require>miniconda</require>
                     <require>openjpeg2</require>
                     <require>proj-devel</require>
+                    <require>OTB</require>
                   </requires>
                   <postinstallScriptlet combine.self="override">
                     <script>conda update conda -y &amp;&amp; conda install --file /application/dependencies/python/packages.list</script>
