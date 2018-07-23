@@ -28,6 +28,7 @@ ERR_CONVERT=13
 ERR_WRONGPOLARIZATION=14
 ERR_METADATA=15
 ERR_OTB=16
+ERR_KV_PAN=17
 
 # add a trap to exit gracefully
 function cleanExit ()
@@ -53,6 +54,7 @@ function cleanExit ()
         ${ERR_WRONGPOLARIZATION}) msg="Error in input product polarization";;
         ${ERR_METADATA}) 	  msg="Error while generating metadata";;
         ${ERR_OTB})          	  msg="Orfeo Toolbox failed to process";;
+	${ERR_KV_PAN})            msg="The Kanopus-V Panchromatic Product is not supported";;
         *)                        msg="Unknown error";;
     esac
 
@@ -153,15 +155,20 @@ function check_product_type() {
   fi
 
   if [[ "${mission}" == "Alos-2" ]]; then
-
+       prodTypeName=""
+       # check if ALOS2 product is a folder
        if [[ -d "${retrievedProduct}" ]]; then
-          ALOS_ZIP=$(ls ${retrievedProduct} | egrep '^.*ALOS2.*.zip$')
+	   # check if ALOS2 folder contains a zip file
+           ALOS_ZIP=$(ls ${retrievedProduct} | egrep '^.*ALOS2.*.zip$')
+           # if doesn't contain a zip it should be already uncompressed -> search summary file into the folder
+	   if [[ -z "$ALOS_ZIP" ]]; then
+	       prodTypeName="$( cat ${retrievedProduct}/summary.txt | sed -n -e 's|^.*_ProcessLevel=\"\(.*\)\".*$|\1|p')"
+ 	   # extract summary file from compressed archive 
+           else
+               prodTypeName="$(unzip -p ${retrievedProduct}/$ALOS_ZIP summary.txt | sed -n -e 's|^.*_ProcessLevel=\"\(.*\)\".*$|\1|p')"
+           fi
        fi
-       [[ -z "$ALOS_ZIP" ]] && ciop-log "ERROR" "Failed to get product type from : ${retrievedProduct}" 
- 
-       prodTypeName="$(unzip -p ${retrievedProduct}/$ALOS_ZIP summary.txt | sed -n -e 's|^.*_ProcessLevel=\"\(.*\)\".*$|\1|p')"
-       [[ -z "$prodTypeName" ]] && ciop-log "ERROR" "Failed to get product type from : $ALOS_ZIP"
-
+       [[ -z "$prodTypeName" ]] && ciop-log "ERROR" "Failed to get product type from : $retrievedProduct"
        [[ "$prodTypeName" != "1.5" ]] && return $ERR_WRONGPRODTYPE      
   fi
 
@@ -926,24 +933,26 @@ function generate_full_res_tif (){
 
   if [ ${mission} = "Pleiades" ]; then
       if [[ -d "${retrievedProduct}" ]]; then
-          cd ${retrievedProduct}
-          
+          #move into current product folder
+	  cd ${retrievedProduct}
           # Get multispectral image file
 	  pleiades_product=$(find ${retrievedProduct}/ -name 'IMG_*MS_*.JP2')
 	  [[ -z "$pleiades_product" ]] && return ${ERR_CONVERT}
-
 	  #set output filename
 	  outputfile="${pleiades_product##*/}"; outputfile="${outputfile%.JP2}.tif"
           #run OTB optical calibration
           otbcli_OpticalCalibration -in ${pleiades_product} -out temp-outputfile.tif -ram ${RAM_AVAILABLE}
           returnCode=$?
           [ $returnCode -eq 0 ] || return ${ERR_OTB}
-          # run pconvert to scale with percetile 2 and 96
-          pconvert -b 3,2,1 -f tif -o ${TMPDIR} temp-outputfile.tif
-          # check the exit code
-          [ $? -eq 0 ] || return $ERR_PCONVERT
+          # histogram skip (percentiles from 2 to 95) on separated bands
+          python $_CIOP_APPLICATION_PATH/data_download_publish/hist_skip_no_zero.py "temp-outputfile.tif" 1 2 96 "temp-outputfile_band_1.tif"
+	  python $_CIOP_APPLICATION_PATH/data_download_publish/hist_skip_no_zero.py "temp-outputfile.tif" 2 2 96 "temp-outputfile_band_2.tif"
+	  python $_CIOP_APPLICATION_PATH/data_download_publish/hist_skip_no_zero.py "temp-outputfile.tif" 3 2 96 "temp-outputfile_band_3.tif"
+          rm temp-outputfile.tif
+	  gdal_merge.py -separate -n 0 -a_nodata 0 -co "PHOTOMETRIC=RGB" -co "ALPHA=YES" "temp-outputfile_band_3.tif" "temp-outputfile_band_2.tif" "temp-outputfile_band_1.tif" -o ${TMPDIR}/temp-outputfile.tif
+          rm temp-outputfile_band_1.tif temp-outputfile_band_2.tif temp-outputfile_band_3.tif
           # re-projection
-          gdalwarp -ot Byte -t_srs EPSG:3857 -srcalpha -dstalpha -co "TILED=YES" -co "BLOCKXSIZE=512" -co "BLOCKYSIZE=512" -co "PHOTOMETRIC=RGB" -co "ALPHA=YES" ${TMPDIR}/temp-outputfile.tif ${outputfile}
+          gdalwarp -ot Byte -t_srs EPSG:3857 -srcnodata 0 -dstnodata 0 -dstalpha -co "TILED=YES" -co "BLOCKXSIZE=512" -co "BLOCKYSIZE=512" -co "PHOTOMETRIC=RGB" -co "ALPHA=YES" ${TMPDIR}/temp-outputfile.tif ${outputfile}
           returnCode=$?
           [ $returnCode -eq 0 ] || return ${ERR_CONVERT}
           #Add overviews
@@ -951,7 +960,7 @@ function generate_full_res_tif (){
           returnCode=$?
           [ $returnCode -eq 0 ] || return ${ERR_CONVERT}
           # remove temp files
-          rm temp-outputfile.tif ${TMPDIR}/temp-outputfile.tif
+          rm ${TMPDIR}/temp-outputfile.tif
           # move result to output folder
           mv ${outputfile} ${OUTPUTDIR}/
           
@@ -1002,44 +1011,47 @@ function generate_full_res_tif (){
 
 
   if [[ "${mission}" == "Alos-2" ]]; then
-	if [[ -d "${retrievedProduct}" ]]; then
-		ALOS_ZIP=$(ls ${retrievedProduct} | egrep '^.*ALOS2.*.zip$')
-		[[ -z "$ALOS_ZIP" ]] && ciop-log "ERROR" "Failed to get ALOS_ZIP"
+      # check if ALOS2 product is a folder
+      if [[ -d "${retrievedProduct}" ]]; then
+          # check if ALOS2 folder contains a zip file
+          ALOS_ZIP=$(ls ${retrievedProduct} | egrep '^.*ALOS2.*.zip$')
+          # if doesn't contain a zip it should be already uncompressed
+          [[ -z "$ALOS_ZIP" ]] || unzip $ALOS_ZIP
+          cd ${retrievedProduct}
+          test_tif_present=$(ls *.tif)
+          [[ "${test_tif_present}" == "" ]] && (ciop-log "ERROR - empty product folder"; return ${ERR_GETDATA})
+	  for img in *.tif ; do
+	      ciop-log "INFO" "Reprojecting "$mission" image: $img"
+              gdalwarp -ot UInt16 -srcnodata 0 -dstnodata 0 -co "TILED=YES" -co "BLOCKXSIZE=512" -co "BLOCKYSIZE=512" -t_srs EPSG:3857 ${img} temp-outputfile.tif
+              returnCode=$?
+              [ $returnCode -eq 0 ] || return ${ERR_CONVERT}
 
-		cd ${retrievedProduct}
-		unzip $ALOS_ZIP
-		for img in *.tif ; do
-		   ciop-log "INFO" "Reprojecting "$mission" image: $img"
-                   gdalwarp -ot UInt16 -srcnodata 0 -dstnodata 0 -co "TILED=YES" -co "BLOCKXSIZE=512" -co "BLOCKYSIZE=512" -t_srs EPSG:3857 ${img} temp-outputfile.tif
-                   returnCode=$?
-                   [ $returnCode -eq 0 ] || return ${ERR_CONVERT}
-
-		   ciop-log "INFO" "Converting to dB "$mission" image: $img"
-		   #prepare snap request file for linear to dB conversion 
-   		   SNAP_REQUEST=$( create_snap_request_linear_to_dB "${retrievedProduct}/temp-outputfile.tif" "${retrievedProduct}/temp-outputfile2.tif" )
-   		   [ $? -eq 0 ] || return ${SNAP_REQUEST_ERROR}
-		   [ $DEBUG -eq 1 ] && cat ${SNAP_REQUEST}
-   		   # invoke the ESA SNAP toolbox
-   		   gpt ${SNAP_REQUEST} -c "${CACHE_SIZE}" &> /dev/null
-   		   # check the exit code
-   		   [ $? -eq 0 ] || return $ERR_SNAP
+	      ciop-log "INFO" "Converting to dB "$mission" image: $img"
+	      #prepare snap request file for linear to dB conversion 
+   	      SNAP_REQUEST=$( create_snap_request_linear_to_dB "${retrievedProduct}/temp-outputfile.tif" "${retrievedProduct}/temp-outputfile2.tif" )
+   	      [ $? -eq 0 ] || return ${SNAP_REQUEST_ERROR}
+	      [ $DEBUG -eq 1 ] && cat ${SNAP_REQUEST}
+   	      # invoke the ESA SNAP toolbox
+  	      gpt ${SNAP_REQUEST} -c "${CACHE_SIZE}" &> /dev/null
+   	      # check the exit code
+   	      [ $? -eq 0 ] || return $ERR_SNAP
 			
-		   ciop-log "INFO" "Scaling and alpha band addition to "$mission" image: $img"
-		   gdal_translate -scale -ot Byte -co "TILED=YES" -co "BLOCKXSIZE=512" -co "BLOCKYSIZE=512" -co "ALPHA=YES" temp-outputfile2.tif temp-outputfile3.tif
-		   returnCode=$?
-                   [ $returnCode -eq 0 ] || return ${ERR_CONVERT}		   
+	      ciop-log "INFO" "Scaling and alpha band addition to "$mission" image: $img"
+	      gdal_translate -scale -ot Byte -co "TILED=YES" -co "BLOCKXSIZE=512" -co "BLOCKYSIZE=512" -co "ALPHA=YES" temp-outputfile2.tif temp-outputfile3.tif
+	      returnCode=$?
+              [ $returnCode -eq 0 ] || return ${ERR_CONVERT}		   
  
-		   gdalwarp -ot Byte -srcnodata 0 -dstnodata 0 -dstalpha -co "TILED=YES" -co "BLOCKXSIZE=512" -co "BLOCKYSIZE=512" -co "ALPHA=YES" -t_srs EPSG:3857 temp-outputfile3.tif ${OUTPUTDIR}/${img}
-		   returnCode=$?
-                   [ $returnCode -eq 0 ] || return ${ERR_CONVERT}
-                   rm -f temp-outputfile*
+	      gdalwarp -ot Byte -srcnodata 0 -dstnodata 0 -dstalpha -co "TILED=YES" -co "BLOCKXSIZE=512" -co "BLOCKYSIZE=512" -co "ALPHA=YES" -t_srs EPSG:3857 temp-outputfile3.tif ${OUTPUTDIR}/${img}
+	      returnCode=$?
+              [ $returnCode -eq 0 ] || return ${ERR_CONVERT}
+              rm -f temp-outputfile*
 
-		   gdaladdo -r average ${OUTPUTDIR}/${img} 2 4 8 16
-		   returnCode=$?
-		   [ $returnCode -eq 0 ] || return ${ERR_CONVERT}
-		done
-		cd -
-        fi
+	      gdaladdo -r average ${OUTPUTDIR}/${img} 2 4 8 16
+	      returnCode=$?
+	      [ $returnCode -eq 0 ] || return ${ERR_CONVERT}
+	  done
+          cd -
+      fi
   fi
 
   if [[ "${mission}" == "Kompsat-5" ]]; then
@@ -1211,14 +1223,22 @@ function generate_full_res_tif (){
   fi
 
   if [[ "${mission}" == "Kanopus-V" ]]; then
-        tif_file=$(find ${retrievedProduct} -name '*.tiff')
+        tif_file=$(find ${retrievedProduct} -name '*MSS*.tiff')
 
         ciop-log "INFO" "Processing Tiff file: $tif_file"
         ciop-log "INFO" "Runing gdal_translate"
         outputfile=${tif_file##*/}; outputfile=${outputfile%.tiff}.tif
-        gdal_translate -ot Byte -of GTiff -b 3 -b 2 -b 1 -scale -co "TILED=YES" -co "BLOCKXSIZE=512" -co "BLOCKYSIZE=512" -co "PHOTOMETRIC=RGB" -co "ALPHA=YES" $tif_file ${TMPDIR}/${outputfile}
+        gdal_translate -ot Byte -of GTiff -b 3 -b 2 -b 1 -scale -co "TILED=YES" -co "BLOCKXSIZE=512" -co "BLOCKYSIZE=512" -co "PHOTOMETRIC=RGB" -co "ALPHA=YES" $tif_file ${TMPDIR}/${outputfile}  > stdout.txt 2>&1
         returnCode=$?
-        [ $returnCode -eq 0 ] || return ${ERR_CONVERT}
+	[ $DEBUG -eq 1 ] && cat stdout.txt 
+	# in case of error check if it is due to a false multispectral product 
+	# (i.e. a product which name contains "MSS" but it is a panchromatic product with only 1 band) 
+        if [ $returnCode -ne 0 ]; then
+            one_band_test=$(cat stdout.txt | grep "only bands 1 to 1 available")
+ 	    rm stdout.txt
+	    [ "${one_band_test}" = "" ] && return ${ERR_CONVERT} || return ${ERR_KV_PAN}
+        fi
+        rm stdout.txt
 
         ciop-log "INFO" "Runing gdalwarp"
         gdalwarp -ot Byte -t_srs EPSG:3857 -srcnodata 0 -dstnodata 0 -dstalpha -co "TILED=YES" -co "BLOCKXSIZE=512" -co "BLOCKYSIZE=512" -co "PHOTOMETRIC=RGB" -co "ALPHA=YES" ${TMPDIR}/${outputfile} ${OUTPUTDIR}/${outputfile}
