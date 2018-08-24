@@ -120,7 +120,7 @@ function check_product_type() {
       # log the value, it helps debugging.
       # the log entry is available in the process stderr
       ciop-log "DEBUG" "Retrieved product type: ${prodTypeName}"
-      if [[ "$prodTypeName" != "L1TP" ]] && [[ "$prodTypeName" != "L1T" ]]; then
+      if [[ "$prodTypeName" != "L1TP" ]] && [[ "$prodTypeName" != "L1T" ]] && [[ "$prodTypeName" != "L1GT" ]] ; then
           return $ERR_WRONGPRODTYPE
       fi
   fi
@@ -189,9 +189,9 @@ function check_product_type() {
   fi
 
   if [[ "${mission}" == "SPOT-6" ]] || [[ "${mission}" == "SPOT-7"  ]]; then
-        spot_xml=$(find ${retrievedProduct}/ -name 'DIM_SPOT?_MS_*.XML' | head -1 | sed 's|^.*\/||')
-	prodTypeName="${spot_xml:29:3}"
-        [[ "$prodTypeName" != "ORT" ]] && return $ERR_WRONGPRODTYPE
+        spot_xml=$(find ${retrievedProduct}/ -name 'DIM_SPOT?_*MS_*.XML')
+	prodTypeName=$(sed -n -e 's|^.*<DATASET_TYPE>\(.*\)</DATASET_TYPE>$|\1|p' ${spot_xml})
+        [[ "$prodTypeName" != "RASTER_ORTHO" ]] && return $ERR_WRONGPRODTYPE
   fi
 
   if [[ "${mission}" == "UK-DMC2" ]]; then
@@ -335,10 +335,10 @@ function mission_prod_retrieval(){
 	[ "${prod_basename_substr_5}" = "ORTHO" ] && mission="UK-DMC2"
         ukdmc2_test=$(echo "${prod_basename}" | grep "UK-DMC-2")
         [ "${ukdmc2_test}" = "" ] || mission="UK-DMC-2"
-        if [[ "${prod_basename_substr_8}" == "RESURS_P" ]] || [[ "${prod_basename_substr_8}" == "RESURS-P" ]] ; then
+        if [[ "${prod_basename_substr_8}" == "RESURS_P" ]] || [[ "${prod_basename_substr_8}" == "RESURS-P" ]] || [[ "${prod_basename_substr_8}" == "Resurs-P" ]] || [[ "${prod_basename_substr_8}" == "Resurs_P" ]] ; then
             mission="Resurs-P"
         fi
-        if [[ "${prod_basename_substr_9}" == "KANOPUS_V" ]] || [[ "${prod_basename_substr_9}" == "KANOPUS-V" ]]; then 
+        if [[ "${prod_basename_substr_9}" == "KANOPUS_V" ]] || [[ "${prod_basename_substr_9}" == "KANOPUS-V" ]] || [[ "${prod_basename_substr_9}" == "Kanopus-V" ]] || [[ "${prod_basename_substr_9}" == "Kanopus_V" ]] ; then 
             mission="Kanopus-V"
         fi
         alos2_test=$(echo "${prod_basename}" | grep "ALOS2")
@@ -894,7 +894,7 @@ function generate_full_res_tif (){
               jp2_product=$(find ${retrievedProduct}/ -name 'IMG_*MS_*.JP2')
           else
               # SPOT case
-              jp2_product=$(find ${retrievedProduct}/ -name 'IMG_SPOT?_MS_*.JP2')
+              jp2_product=$(find ${retrievedProduct}/ -name 'IMG_SPOT?_*MS_*.JP2')
           fi 
           # convert ssv to array
           declare -a jp2_product_arr=(${jp2_product})
@@ -1150,7 +1150,7 @@ function generate_full_res_tif (){
   fi
 
   if [[ "${mission}" == "Kanopus-V" ]]; then
-        tif_file=$(find ${retrievedProduct} -name '*MSS*.tiff')
+        tif_file=$(find ${retrievedProduct} -name '*.tiff' | grep '/MSS/' )
 
         ciop-log "INFO" "Processing Tiff file: $tif_file"
         ciop-log "INFO" "Running gdal_translate"
@@ -1947,7 +1947,7 @@ function main() {
 	### PRODUCT TYPE CHECK
 	
 	# report activity in the log
-        ciop-log "INFO" "Checking product type from product name"
+        ciop-log "INFO" "Checking product type"
         #get product type from product name
         prodType=$( check_product_type "${retrievedProduct}" "${mission}" )
         returnCode=$?
