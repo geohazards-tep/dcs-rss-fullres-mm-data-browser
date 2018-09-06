@@ -912,11 +912,14 @@ function generate_full_res_tif (){
               returnCode=$?
               [ $returnCode -eq 0 ] || return ${ERR_OTB}
               # histogram skip (percentiles from 2 to 95) on separated bands
-              python $_CIOP_APPLICATION_PATH/data_download_publish/hist_skip_no_zero.py "temp-outputfile.tif" 1 2 96 "temp-outputfile_band_1.tif"
-	      python $_CIOP_APPLICATION_PATH/data_download_publish/hist_skip_no_zero.py "temp-outputfile.tif" 2 2 96 "temp-outputfile_band_2.tif"
-	      python $_CIOP_APPLICATION_PATH/data_download_publish/hist_skip_no_zero.py "temp-outputfile.tif" 3 2 96 "temp-outputfile_band_3.tif"
+              python $_CIOP_APPLICATION_PATH/data_download_publish/hist_skip_no_zero.py "temp-outputfile.tif" 1 2 94 "temp-outputfile_band_1.tif"
+	      python $_CIOP_APPLICATION_PATH/data_download_publish/hist_skip_no_zero.py "temp-outputfile.tif" 2 2 94 "temp-outputfile_band_2.tif"
+	      python $_CIOP_APPLICATION_PATH/data_download_publish/hist_skip_no_zero.py "temp-outputfile.tif" 3 2 94 "temp-outputfile_band_3.tif"
+              # remove temp file
               rm temp-outputfile.tif
-	      gdal_merge.py -separate -n 0 -a_nodata 0 -co "PHOTOMETRIC=RGB" -co "ALPHA=YES" "temp-outputfile_band_3.tif" "temp-outputfile_band_2.tif" "temp-outputfile_band_1.tif" -o ${TMPDIR}/temp-outputfile.tif
+	      # merge bands to create RGB+ALPHA
+              gdal_merge.py -separate -n 0 -a_nodata 0 -co "PHOTOMETRIC=RGB" -co "ALPHA=YES" "temp-outputfile_band_1.tif" "temp-outputfile_band_2.tif" "temp-outputfile_band_3.tif" -o ${TMPDIR}/temp-outputfile.tif
+	      # remove temp files
               rm temp-outputfile_band_1.tif temp-outputfile_band_2.tif temp-outputfile_band_3.tif
               # re-projection
               gdalwarp -ot Byte -t_srs EPSG:3857 -srcnodata 0 -dstnodata 0 -dstalpha -co "TILED=YES" -co "BLOCKXSIZE=512" -co "BLOCKYSIZE=512" -co "PHOTOMETRIC=RGB" -co "ALPHA=YES" ${TMPDIR}/temp-outputfile.tif ${outputfile}
@@ -967,9 +970,12 @@ function generate_full_res_tif (){
    	      [ $? -eq 0 ] || return $ERR_SNAP
 			
 	      ciop-log "INFO" "Scaling and alpha band addition to "$mission" image: $img"
-	      gdal_translate -scale -ot Byte -co "TILED=YES" -co "BLOCKXSIZE=512" -co "BLOCKYSIZE=512" -co "ALPHA=YES" temp-outputfile2.tif temp-outputfile3.tif
-	      returnCode=$?
-              [ $returnCode -eq 0 ] || return ${ERR_CONVERT}		   
+              # histogram skip (percentiles from 2 to 95) on separated bands
+              python $_CIOP_APPLICATION_PATH/data_download_publish/hist_skip_no_zero.py "temp-outputfile2.tif" 1 2 98 "temp-outputfile3.tif"
+
+	      #gdal_translate -scale -ot Byte -co "TILED=YES" -co "BLOCKXSIZE=512" -co "BLOCKYSIZE=512" -co "ALPHA=YES" temp-outputfile2.tif temp-outputfile3.tif
+	      #returnCode=$?
+              #[ $returnCode -eq 0 ] || return ${ERR_CONVERT}		   
  
 	      gdalwarp -ot Byte -srcnodata 0 -dstnodata 0 -dstalpha -co "TILED=YES" -co "BLOCKXSIZE=512" -co "BLOCKYSIZE=512" -co "ALPHA=YES" -t_srs EPSG:3857 temp-outputfile3.tif ${OUTPUTDIR}/${img}
 	      returnCode=$?
@@ -987,40 +993,24 @@ function generate_full_res_tif (){
   if [[ "${mission}" == "Kompsat-5" ]]; then
       if [[ -d "${retrievedProduct}" ]]; then
           img=$(find ${retrievedProduct}/ -name ${productName}.tif)
-          #K5 needs to be translated otherwise SNAP cannot ingest it 
-          ciop-log "INFO" "Tif format translation "$mission" image: $img"
-          gdal_translate -co "TILED=YES" -co "BLOCKXSIZE=512" -co "BLOCKYSIZE=512" ${img} temp-outputfile.tif
-          returnCode=$?
-          [ $returnCode -eq 0 ] || return ${ERR_CONVERT}
-
-          ciop-log "INFO" "Converting to dB "$mission" image: $img"
-          #prepare snap request file for linear to dB conversion
-          SNAP_REQUEST=$( create_snap_request_linear_to_dB "temp-outputfile.tif" "temp-outputfile2.tif" )
-          [ $? -eq 0 ] || return ${SNAP_REQUEST_ERROR}
-          [ $DEBUG -eq 1 ] && cat ${SNAP_REQUEST}
-          # invoke the ESA SNAP toolbox
-          gpt ${SNAP_REQUEST} -c "${CACHE_SIZE}" &> /dev/null
-          # check the exit code
-          [ $? -eq 0 ] || return $ERR_SNAP
-          # remove temp files
-          rm temp-outputfile.tif
-          ciop-log "INFO" "Histogram skip and Linear stretching of dB values "$mission" image: $img"
-          # histogram skip (percentiles from 2 to 95) on separated bands
-          python $_CIOP_APPLICATION_PATH/data_download_publish/hist_skip_no_zero.py "temp-outputfile2.tif" 1 2 96 "temp-outputfile3.tif"
-          # remove temp files
-          rm temp-outputfile2.tif
+           
+          # linear stretching between values tailored on mission data
+          local minVal=1
+          local maxVal=500
+          python $_CIOP_APPLICATION_PATH/data_download_publish/linear_stretch.py "${img}" 1 "${minVal}" "${maxVal}" "temp-outputfile.tif"
           ciop-log "INFO" "Reprojecting and alpha band addition to "$mission" image: $img"
           outputfile=${TMPDIR}/${productName}.tif
           # re-projection
-          gdalwarp -ot Byte -t_srs EPSG:3857 -srcnodata 0 -dstnodata 0 -dstalpha -co "TILED=YES" -co "BLOCKXSIZE=512" -co "BLOCKYSIZE=512" -co "ALPHA=YES" temp-outputfile3.tif ${outputfile}
+          gdalwarp -ot Byte -t_srs EPSG:3857 -srcnodata 0 -dstnodata 0 -dstalpha -co "TILED=YES" -co "BLOCKXSIZE=512" -co "BLOCKYSIZE=512" -co "ALPHA=YES" temp-outputfile.tif ${outputfile}
           returnCode=$?
           [ $returnCode -eq 0 ] || return ${ERR_CONVERT}
+          # remove temp files
+          rm temp-outputfile.tif
+  
           #Add overviews
           gdaladdo -r average ${outputfile} 2 4 8 16
           returnCode=$?
           [ $returnCode -eq 0 ] || return ${ERR_CONVERT}
-          # remove temp files
-          rm temp-outputfile3.tif
           # move result to output folder
           mv ${outputfile} ${OUTPUTDIR}/
           
@@ -1118,66 +1108,51 @@ function generate_full_res_tif (){
 	fi
   fi
 
-  if [[ "${mission}" == "Resurs-P" ]]; then
-        ### !!! TO-DO: update once reference Resurs-P info, doc and samples are provided !!! ###
-	tif_file=$(find ${retrievedProduct} -name '*.tiff')
-
-	ciop-log "INFO" "Processing Tiff file: $tif_file"
-	ciop-log "INFO" "Running gdal_translate"
-	outputfile=${tif_file##*/}; outputfile=${outputfile%.tiff}.tif
-	gdal_translate -ot Byte -of GTiff -b 3 -b 2 -b 1 -scale -co "TILED=YES" -co "BLOCKXSIZE=512" -co "BLOCKYSIZE=512" -co "PHOTOMETRIC=RGB" -co "ALPHA=YES" $tif_file ${TMPDIR}/${outputfile} > stdout.txt 2>&1
-        returnCode=$?
-        [ $DEBUG -eq 1 ] && cat stdout.txt
-        # in case of error check if it is due to a false multispectral product
-        # (i.e. a product with only 1 band)
-        if [ $returnCode -ne 0 ]; then
-            one_band_test=$(cat stdout.txt | grep "only bands 1 to 1 available")
-            rm stdout.txt
-            [ "${one_band_test}" = "" ] && return ${ERR_CONVERT} || return ${ERR_PAN}
-        fi
-        rm stdout.txt
-
-	ciop-log "INFO" "Running gdalwarp"
-	gdalwarp -ot Byte -t_srs EPSG:3857 -srcnodata 0 -dstnodata 0 -dstalpha -co "TILED=YES" -co "BLOCKXSIZE=512" -co "BLOCKYSIZE=512" -co "PHOTOMETRIC=RGB" -co "ALPHA=YES" ${TMPDIR}/${outputfile} ${OUTPUTDIR}/${outputfile}
-	returnCode=$?
-	[ $returnCode -eq 0 ] || return ${ERR_CONVERT}
-	rm -f ${TMPDIR}/${outputfile}
-
-	gdaladdo -r average ${OUTPUTDIR}/${outputfile} 2 4 8 16
-        returnCode=$?
-        [ $returnCode -eq 0 ] || return ${ERR_CONVERT}
+  if [[ "${mission}" == "Resurs-P" ]] || [[ "${mission}" == "Kanopus-V" ]]; then
+      ### !!! TO-DO: update once reference Resurs-P info, doc and samples are provided !!! ###
+      local tif_file=""
+      # input file dependon mission
+      if [[ "${mission}" == "Resurs-P" ]] ; then
+          tif_file=$(find ${retrievedProduct} -name '*.tiff')
+      elif  [[ "${mission}" == "Kanopus-V" ]] ; then
+          tif_file=$(find ${retrievedProduct} -name '*.tiff' | grep '/MSS/' )
+      fi
+      ciop-log "INFO" "Processing Tiff file: $tif_file"
+      ciop-log "INFO" "Running gdal_translate"
+      outputfile=${tif_file##*/}; outputfile=${outputfile%.tiff}.tif
+      gdal_translate -ot Byte -of GTiff -b 3 -b 2 -b 1 -scale -co "TILED=YES" -co "BLOCKXSIZE=512" -co "BLOCKYSIZE=512" -co "PHOTOMETRIC=RGB" -co "ALPHA=YES" $tif_file temp-outputfile.tif > stdout.txt 2>&1
+      returnCode=$?
+      [ $DEBUG -eq 1 ] && cat stdout.txt
+      # in case of error check if it is due to a false multispectral product
+      # (i.e. a product with only 1 band)
+      if [ $returnCode -ne 0 ]; then
+          one_band_test=$(cat stdout.txt | grep "only bands 1 to 1 available")
+          rm stdout.txt
+          [ "${one_band_test}" = "" ] && return ${ERR_CONVERT} || return ${ERR_PAN}
+      fi
+      # rm temp files
+      rm stdout.txt
+      rm temp-outputfile.tif
+      # histogram skip (percentiles from 2 to 96) on separated bands
+      python $_CIOP_APPLICATION_PATH/data_download_publish/hist_skip_no_zero.py "${tif_file}" 3 2 96 "temp-outputfile_band_r.tif"
+      python $_CIOP_APPLICATION_PATH/data_download_publish/hist_skip_no_zero.py "${tif_file}" 2 2 96 "temp-outputfile_band_g.tif"
+      python $_CIOP_APPLICATION_PATH/data_download_publish/hist_skip_no_zero.py "${tif_file}" 1 2 96 "temp-outputfile_band_b.tif"
+      gdal_merge.py -separate -n 0 -a_nodata 0 -co "PHOTOMETRIC=RGB" -co "ALPHA=YES" "temp-outputfile_band_r.tif" "temp-outputfile_band_g.tif" "temp-outputfile_band_b.tif" -o ${TMPDIR}/temp-outputfile.tif
+      # rm temp files
+      rm temp-outputfile_band_r.tif temp-outputfile_band_g.tif temp-outputfile_band_b.tif
+      # re-projection
+      gdalwarp -ot Byte -t_srs EPSG:3857 -srcnodata 0 -dstnodata 0 -dstalpha -co "TILED=YES" -co "BLOCKXSIZE=512" -co "BLOCKYSIZE=512" -co "PHOTOMETRIC=RGB" -co "ALPHA=YES" ${TMPDIR}/temp-outputfile.tif ${OUTPUTDIR}/${outputfile}
+      returnCode=$?
+      [ $returnCode -eq 0 ] || return ${ERR_CONVERT}
+      # rm temp files
+      rm ${TMPDIR}/temp-outputfile.tif
+      # add overviews
+      gdaladdo -r average ${OUTPUTDIR}/${outputfile} 2 4 8 16
+      returnCode=$?
+      [ $returnCode -eq 0 ] || return ${ERR_CONVERT}
 
   fi
 
-  if [[ "${mission}" == "Kanopus-V" ]]; then
-        tif_file=$(find ${retrievedProduct} -name '*.tiff' | grep '/MSS/' )
-
-        ciop-log "INFO" "Processing Tiff file: $tif_file"
-        ciop-log "INFO" "Running gdal_translate"
-        outputfile=${tif_file##*/}; outputfile=${outputfile%.tiff}.tif
-        gdal_translate -ot Byte -of GTiff -b 3 -b 2 -b 1 -scale -co "TILED=YES" -co "BLOCKXSIZE=512" -co "BLOCKYSIZE=512" -co "PHOTOMETRIC=RGB" -co "ALPHA=YES" $tif_file ${TMPDIR}/${outputfile}  > stdout.txt 2>&1
-        returnCode=$?
-	[ $DEBUG -eq 1 ] && cat stdout.txt 
-	# in case of error check if it is due to a false multispectral product 
-	# (i.e. a product which name contains "MSS" but it is a panchromatic product with only 1 band) 
-        if [ $returnCode -ne 0 ]; then
-            one_band_test=$(cat stdout.txt | grep "only bands 1 to 1 available")
- 	    rm stdout.txt
-	    [ "${one_band_test}" = "" ] && return ${ERR_CONVERT} || return ${ERR_PAN}
-        fi
-        rm stdout.txt
-
-        ciop-log "INFO" "Running gdalwarp"
-        gdalwarp -ot Byte -t_srs EPSG:3857 -srcnodata 0 -dstnodata 0 -dstalpha -co "TILED=YES" -co "BLOCKXSIZE=512" -co "BLOCKYSIZE=512" -co "PHOTOMETRIC=RGB" -co "ALPHA=YES" ${TMPDIR}/${outputfile} ${OUTPUTDIR}/${outputfile}
-        returnCode=$?
-        [ $returnCode -eq 0 ] || return ${ERR_CONVERT}
-	rm -f ${TMPDIR}/${outputfile}
-	
-	gdaladdo -r average ${OUTPUTDIR}/${outputfile} 2 4 8 16
-        returnCode=$?
-        [ $returnCode -eq 0 ] || return ${ERR_CONVERT}
- 
-  fi
 
   if [[ "${mission}" == "Radarsat-2" ]]; then
       if [[ -d "${retrievedProduct}" ]]; then
@@ -1186,9 +1161,9 @@ function generate_full_res_tif (){
           #get band co-pol from product name
           bandCoPol=""
           if [[ $( echo ${productName} | grep "HH" ) != "" ]] ; then
-              bandCoPol="Sigma0_HH"
+              bandCoPol="Sigma0_HH_db"
           elif [[ $( echo ${productName} | grep "VV" ) != "" ]]; then
-              bandCoPol="Sigma0_VV"
+              bandCoPol="Sigma0_VV_db"
           else
               return ${ERR_WRONGPOLARIZATION}
           fi
@@ -1198,7 +1173,7 @@ function generate_full_res_tif (){
           outProd=${TMPDIR}/rs2_cal_tc_db_co_pol
           outProdTIF=${outProd}.tif
           # prepare the SNAP request
-          SNAP_REQUEST=$( create_snap_request_cal_ml_tc_db "${product_xml}" "${bandCoPol}" "${ml}" "${pixelSpacing}" "${outProd}" )
+          SNAP_REQUEST=$( create_snap_request_cal_ml_tc_db_scale_byte_rs2 "${product_xml}" "${bandCoPol}" "${ml}" "${pixelSpacing}" "${outProd}" )
           [ $? -eq 0 ] || return ${SNAP_REQUEST_ERROR}
           [ $DEBUG -eq 1 ] && cat ${SNAP_REQUEST}
           # report activity in the log
@@ -1209,29 +1184,9 @@ function generate_full_res_tif (){
           gpt $SNAP_REQUEST -c "${CACHE_SIZE}" &> /dev/null
           # check the exit code
           [ $? -eq 0 ] || return $ERR_SNAP
-          sourceBandName=${bandCoPol}_db
-          #min max percentiles to be used in histogram stretching
-          pc_min=2
-          pc_max=95
-          pc_min_max=$( extract_pc1_pc2 $outProdTIF $sourceBandName $pc_min $pc_max )
-          [ $? -eq 0 ] || return ${ERR_CONVERT}
-          # extract coefficient for linear stretching
-          min_out=1
-          max_out=255
-          $_CIOP_APPLICATION_PATH/data_download_publish/linearEquationCoefficients.py ${pc_min_max} ${min_out} ${max_out} > ab.txt
-          a=$( cat ab.txt | grep a | sed -n -e 's|^.*a=\(.*\)|\1|p')
-          b=$( cat ab.txt | grep b |  sed -n -e 's|^.*b=\(.*\)|\1|p')
-          ciop-log "INFO" "Linear stretching of dB values "$mission" image: $img"
-          SNAP_REQUEST=$( create_snap_request_linear_stretching "${outProdTIF}" "${sourceBandName}" "${a}" "${b}" "${min_out}" "${max_out}" "temp-outputfile.tif" )
-          [ $? -eq 0 ] || return ${SNAP_REQUEST_ERROR}
-          [ $DEBUG -eq 1 ] && cat ${SNAP_REQUEST}
-          # invoke the ESA SNAP toolbox
-          gpt ${SNAP_REQUEST} -c "${CACHE_SIZE}" &> /dev/null
-          # check the exit code
-          [ $? -eq 0 ] || return $ERR_SNAP
-          rm ${outProdTIF}
-          ciop-log "INFO" "Reprojecting and alpha band addition to "$mission" image: $productName"
-          gdalwarp -ot Byte -srcnodata 0 -dstnodata 0 -dstalpha -co "TILED=YES" -co "BLOCKXSIZE=512" -co "BLOCKYSIZE=512" -co "ALPHA=YES" -t_srs EPSG:3857 temp-outputfile.tif ${OUTPUTDIR}/${productName}.tif
+          
+	  ciop-log "INFO" "Reprojecting and alpha band addition to "$mission" image: $productName"
+          gdalwarp -ot Byte -srcnodata 0 -dstnodata 0 -dstalpha -co "TILED=YES" -co "BLOCKXSIZE=512" -co "BLOCKYSIZE=512" -co "ALPHA=YES" -t_srs EPSG:3857 ${outProdTIF} ${OUTPUTDIR}/${productName}.tif
           returnCode=$?
           [ $returnCode -eq 0 ] || return ${ERR_CONVERT}
           #add overlay
@@ -1239,7 +1194,7 @@ function generate_full_res_tif (){
           returnCode=$?
           [ $returnCode -eq 0 ] || return ${ERR_CONVERT}
           # cleanup
-          rm -f temp-outputfile.tif
+          rm -f ${outProdTIF} 
       else
           ciop-log "ERROR" "The retrieved product ${retrievedProduct} is not a directory or does not exist"
           return ${ERR_UNPACKING}
@@ -1266,20 +1221,23 @@ function generate_full_res_tif (){
       else
           return ${ERR_GETDATA}
       fi
-      # create full resolution tif image with Red=B3 Green=B2 Blue=B1
-      pconvert -b 3,2,1 -f tif -o ${OUTPUTDIR} ${mss_product} &> /dev/null
-      # check the exit code
-      [ $? -eq 0 ] || return $ERR_PCONVERT
-      # get output filename genarated by pconvert
-      pconvert_out=$(ls ${OUTPUTDIR} | egrep '^.*.tif$')
       #define output filename
       outputfile=${prodBasename}.tif
-      # run gdalwarp for product reprojection
-      gdalwarp -ot Byte -t_srs EPSG:3857 -srcalpha -dstalpha -co "TILED=YES" -co "BLOCKXSIZE=512" -co "BLOCKYSIZE=512" -co "PHOTOMETRIC=RGB" -co "ALPHA=YES" ${OUTPUTDIR}/$pconvert_out ${OUTPUTDIR}/$outputfile
+      # create full resolution tif image with Red=B4(NIR) Green=B3(RED) Blue=B2(GREEN)
+      # histogram skip (percentiles from 2 to 96) on separated bands
+      python $_CIOP_APPLICATION_PATH/data_download_publish/hist_skip_no_zero.py "${mss_product}" 4 2 96 "temp-outputfile_band_r.tif"
+      python $_CIOP_APPLICATION_PATH/data_download_publish/hist_skip_no_zero.py "${mss_product}" 3 2 96 "temp-outputfile_band_g.tif"
+      python $_CIOP_APPLICATION_PATH/data_download_publish/hist_skip_no_zero.py "${mss_product}" 2 2 96 "temp-outputfile_band_b.tif"
+      # merge RGB bands
+      gdal_merge.py -separate -n 0 -a_nodata 0 -co "PHOTOMETRIC=RGB" -co "ALPHA=YES" "temp-outputfile_band_r.tif" "temp-outputfile_band_g.tif" "temp-outputfile_band_b.tif" -o ${TMPDIR}/temp-outputfile.tif
+      # rm temp files
+      rm temp-outputfile_band_r.tif temp-outputfile_band_g.tif temp-outputfile_band_b.tif
+      # re-projection
+      gdalwarp -ot Byte -t_srs EPSG:3857 -srcnodata 0 -dstnodata 0 -dstalpha -co "TILED=YES" -co "BLOCKXSIZE=512" -co "BLOCKYSIZE=512" -co "PHOTOMETRIC=RGB" -co "ALPHA=YES" ${TMPDIR}/temp-outputfile.tif ${OUTPUTDIR}/${outputfile}
       returnCode=$?
       [ $returnCode -eq 0 ] || return ${ERR_CONVERT}
-      #Remove temporary file
-      rm -f ${OUTPUTDIR}/$pconvert_out    
+      # rm temp files
+      rm ${TMPDIR}/temp-outputfile.tif
       #Add overviews
       gdaladdo -r average ${OUTPUTDIR}/$outputfile 2 4 8 16
       returnCode=$?
@@ -1336,22 +1294,20 @@ function generate_full_res_tif (){
       #define output filename
       outputfile=$(basename ${BLUE} | sed -n -e 's|\(.*\)_1.tif|\1|p')
       outputfile=${OUTPUTDIR}/${outputfile}.tif
-      #Merge RGB bands in a single GeoTiff
-      gdal_merge.py -separate -n 0 -co "PHOTOMETRIC=RGB" -co "ALPHA=YES" ${RED} ${GREEN} ${BLUE} -o temp-rgb-outputfile.tif
-      returnCode=$?
-      [ $returnCode -eq 0 ] || return ${ERR_CONVERT}
 
-      ciop-log "INFO" "Apply reprojection and set alpha band"
-      gdal_translate -ot Byte -of GTiff -b 1 -b 2 -b 3 -scale -co "TILED=YES" -co "BLOCKXSIZE=512" -co "BLOCKYSIZE=512" -co "PHOTOMETRIC=RGB" -co "ALPHA=YES" temp-rgb-outputfile.tif temp-outputfile.tif
+      # histogram skip (percentiles from 2 to 96) on separated bands
+      python $_CIOP_APPLICATION_PATH/data_download_publish/hist_skip_no_zero.py "${RED}" 1 2 96 "temp-outputfile_band_r.tif"
+      python $_CIOP_APPLICATION_PATH/data_download_publish/hist_skip_no_zero.py "${GREEN}" 1 2 96 "temp-outputfile_band_g.tif"
+      python $_CIOP_APPLICATION_PATH/data_download_publish/hist_skip_no_zero.py "${BLUE}" 1 2 96 "temp-outputfile_band_b.tif"
+      # Merge RGB bands in a single GeoTiff
+      gdal_merge.py -separate -n 0 -a_nodata 0 -co "PHOTOMETRIC=RGB" -co "ALPHA=YES" "temp-outputfile_band_r.tif" "temp-outputfile_band_g.tif" "temp-outputfile_band_b.tif" -o ${TMPDIR}/temp-outputfile.tif
+      # remove temp files
+      rm temp-outputfile_band_r.tif temp-outputfile_band_g.tif temp-outputfile_band_b.tif
+      # re-projection
+      gdalwarp -ot Byte -t_srs EPSG:3857 -srcnodata 0 -dstnodata 0 -dstalpha -co "TILED=YES" -co "BLOCKXSIZE=512" -co "BLOCKYSIZE=512" -co "PHOTOMETRIC=RGB" -co "ALPHA=YES" ${TMPDIR}/temp-outputfile.tif ${outputfile}
       returnCode=$?
-      [ $returnCode -eq 0 ] || return ${ERR_CONVERT}
-
-      gdalwarp -ot Byte -t_srs EPSG:3857 -srcnodata 0 -dstnodata 0 -dstalpha -co "TILED=YES" -co "BLOCKXSIZE=512" -co "BLOCKYSIZE=512" -co "PHOTOMETRIC=RGB" -co "ALPHA=YES" temp-outputfile.tif ${outputfile}
-      returnCode=$?
-      [ $returnCode -eq 0 ] || return ${ERR_CONVERT}
-      # Remove temp files
-      rm -f temp-outputfile.tif
-      rm -f temp-rgb-outputfile.tif
+      # remove temp files
+      rm ${TMPDIR}/temp-outputfile.tif
 
       #Add overviews
       gdaladdo -r average ${outputfile} 2 4 8 16
@@ -1364,7 +1320,7 @@ function generate_full_res_tif (){
 }
 
 
-function create_snap_request_cal_ml_tc_db(){
+function create_snap_request_cal_ml_tc_db_scale_byte_rs2(){
 
 # function call create_snap_request_cal_ml_tc_d "${product_xml}" "${bandCoPol}" "${ml}" "${pixelSpacing}" "${outProd}" 
 
@@ -1489,13 +1445,62 @@ ${commentCalSrcBegin}  <sourceProduct refid="Calibration"/> ${commentCalSrcEnd}
       <sourceProduct refid="Terrain-Correction"/>
     </sources>
     <parameters class="com.bc.ceres.binding.dom.XppDomElement">
+      <sourceBands/>
+    </parameters>
+  </node>
+  <node id="BandSelect">
+    <operator>BandSelect</operator>
+    <sources>
+      <sourceProduct refid="LinearToFromdB"/>
+    </sources>
+    <parameters class="com.bc.ceres.binding.dom.XppDomElement">
+      <selectedPolarisations/>
       <sourceBands>${bandCoPol}</sourceBands>
+      <bandNamePattern/>
+    </parameters>
+  </node>
+  <node id="BandMaths">
+    <operator>BandMaths</operator>
+    <sources>
+      <sourceProduct refid="BandSelect"/>
+    </sources>
+    <parameters class="com.bc.ceres.binding.dom.XppDomElement">
+      <targetBands>
+        <targetBand>
+          <name>clipped</name>
+          <type>float32</type>
+          <expression>if fneq(${bandCoPol},0.0) then (if ${bandCoPol}&lt;=-15 then -15 else (if ${bandCoPol}&gt;=5 then 5 else ${bandCoPol})) else NaN</expression>
+          <description/>
+          <unit/>
+          <noDataValue>NaN</noDataValue>
+        </targetBand>
+      </targetBands>
+      <variables/>
+    </parameters>
+  </node>
+  <node id="BandMaths(2)">
+    <operator>BandMaths</operator>
+    <sources>
+      <sourceProduct refid="BandMaths"/>
+    </sources>
+    <parameters class="com.bc.ceres.binding.dom.XppDomElement">
+      <targetBands>
+        <targetBand>
+          <name>quantized</name>
+          <type>uint8</type>
+          <expression>if !nan(clipped) then floor(clipped*12.7+191.5) else NaN</expression>
+          <description/>
+          <unit/>
+          <noDataValue>NaN</noDataValue>
+        </targetBand>
+      </targetBands>
+      <variables/>
     </parameters>
   </node>
   <node id="Write">
     <operator>Write</operator>
     <sources>
-      <sourceProduct refid="LinearToFromdB"/>
+      <sourceProduct refid="BandMaths(2)"/>
     </sources>
     <parameters class="com.bc.ceres.binding.dom.XppDomElement">
       <file>${outprod}</file>

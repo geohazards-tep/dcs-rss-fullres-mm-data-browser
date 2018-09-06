@@ -73,7 +73,7 @@ def hist_skip(inFname, bandIndex, percentileMin, percentileMax, outFname, nbucke
       print "%f,%f" % (p, v)
   
   # Print out gdal_calc command
-  gdalCalcCommand="gdal_calc.py -A "+inFname+" --A_band="+bandIndex+" --calc="+'"'+str(vals[1])+"*logical_and(A>0, A<="+str(vals[1])+")+A*(A>"+str(vals[1])+")"+'"'+" --outfile=gdal_calc_result.tif"
+  gdalCalcCommand="gdal_calc.py -A "+inFname+" --A_band="+bandIndex+" --calc="+'"'+str(vals[1])+"*logical_and(A>0, A<="+str(vals[1])+")+A*(A>"+str(vals[1])+")"+'"'+" --outfile=gdal_calc_result.tif --NoDataValue=0"
   print "running  "+gdalCalcCommand
   os.system(gdalCalcCommand)
   
