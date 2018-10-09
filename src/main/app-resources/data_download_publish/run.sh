@@ -327,6 +327,7 @@ function mission_prod_retrieval(){
         [ "${prod_basename_substr_3}" = "K5_" ] && mission="Kompsat-5"
         [ "${prod_basename_substr_3}" = "K3_" ] && mission="Kompsat-3"
 	[ "${prod_basename_substr_3}" = "LC8" ] && mission="Landsat-8"
+        [ "${prod_basename_substr_4}" = "LC08" ] && mission="Landsat-8"
         [ "${prod_basename_substr_4}" = "LS08" ] && mission="Landsat-8"
         [ "${prod_basename_substr_4}" = "MSC_" ] && mission="Kompsat-2"
         [ "${prod_basename_substr_4}" = "FCGC" ] && mission="Pleiades"
@@ -972,11 +973,7 @@ function generate_full_res_tif (){
 	      ciop-log "INFO" "Scaling and alpha band addition to "$mission" image: $img"
               # histogram skip (percentiles from 2 to 95) on separated bands
               python $_CIOP_APPLICATION_PATH/data_download_publish/hist_skip_no_zero.py "temp-outputfile2.tif" 1 2 98 "temp-outputfile3.tif"
-
-	      #gdal_translate -scale -ot Byte -co "TILED=YES" -co "BLOCKXSIZE=512" -co "BLOCKYSIZE=512" -co "ALPHA=YES" temp-outputfile2.tif temp-outputfile3.tif
-	      #returnCode=$?
-              #[ $returnCode -eq 0 ] || return ${ERR_CONVERT}		   
- 
+              # reprojection
 	      gdalwarp -ot Byte -srcnodata 0 -dstnodata 0 -dstalpha -co "TILED=YES" -co "BLOCKXSIZE=512" -co "BLOCKYSIZE=512" -co "ALPHA=YES" -t_srs EPSG:3857 temp-outputfile3.tif ${OUTPUTDIR}/${img}
 	      returnCode=$?
               [ $returnCode -eq 0 ] || return ${ERR_CONVERT}
@@ -1047,28 +1044,11 @@ function generate_full_res_tif (){
                 returnCode=$?
                 [ $returnCode -eq 0 ] || return ${ERR_CONVERT}
 
-                ciop-log "INFO" "Converting to dB "$mission" image: $img"
-                #prepare snap request file for linear to dB conversion
-                SNAP_REQUEST=$( create_snap_request_linear_to_dB "temp-outputfile.tif" "temp-outputfile2.tif" )
-                [ $? -eq 0 ] || return ${SNAP_REQUEST_ERROR}
-                [ $DEBUG -eq 1 ] && cat ${SNAP_REQUEST}
-                # invoke the ESA SNAP toolbox
-                gpt ${SNAP_REQUEST} -c "${CACHE_SIZE}" &> /dev/null
-                # check the exit code
-                [ $? -eq 0 ] || return $ERR_SNAP
-
                 ciop-log "INFO" "Scaling and alpha band addition to "$mission" image: $img"
-                #extract min max to avoid full white image issue
-                tiffProduct=temp-outputfile2.tif
-                sourceBandName=band_1
-                min_max=$( extract_min_max $tiffProduct $sourceBandName )
-                [ $? -eq 0 ] || return ${ERR_CONVERT}
-                # since min_max is like "minValue" "maxValue" these space separated strings can be directly given to gdal_translate
-                gdal_translate -scale ${min_max} -ot Byte -co "TILED=YES" -co "BLOCKXSIZE=512" -co "BLOCKYSIZE=512" -co "ALPHA=YES" temp-outputfile2.tif temp-outputfile3.tif
-                returnCode=$?
-                [ $returnCode -eq 0 ] || return ${ERR_CONVERT}
-
-                gdalwarp -ot Byte -srcnodata 0 -dstnodata 0 -dstalpha -co "TILED=YES" -co "BLOCKXSIZE=512" -co "BLOCKYSIZE=512" -co "ALPHA=YES" -t_srs EPSG:3857 temp-outputfile3.tif ${OUTPUTDIR}/${img}
+                # histogram skip (percentiles from 2 to 96) 
+                python $_CIOP_APPLICATION_PATH/data_download_publish/hist_skip_no_zero.py "temp-outputfile.tif" 1 2 96 "temp-outputfile2.tif"
+                # reprojection
+                gdalwarp -ot Byte -srcnodata 0 -dstnodata 0 -dstalpha -co "TILED=YES" -co "BLOCKXSIZE=512" -co "BLOCKYSIZE=512" -co "ALPHA=YES" -t_srs EPSG:3857 temp-outputfile2.tif ${OUTPUTDIR}/${img}
                 returnCode=$?
                 [ $returnCode -eq 0 ] || return ${ERR_CONVERT}
                 rm -f temp-outputfile*
