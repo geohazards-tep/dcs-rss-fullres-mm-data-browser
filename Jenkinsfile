@@ -5,7 +5,7 @@ pipeline {
   }
 
   environment {
-        PATH="/opt/anaconda/bin:/usr/local/bin:/usr/bin:/bin:/usr/sbin:/sbin:/usr/local/MacGPG2/bin"
+        PATH="/opt/anaconda/bin:/usr/local/bin:/usr/bin:/bin:/usr/sbin:/sbin:/opt/X11/bin:/opt/puppetlabs/bin:/Library/Frameworks/Mono.framework/Versions/Current/Commands"
   }
 
   agent {
