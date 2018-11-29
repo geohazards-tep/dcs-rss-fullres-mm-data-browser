@@ -81,14 +81,18 @@ function check_product_type() {
   fi
 
   if [ ${mission} = "Sentinel-2"  ] ; then
-      # productName assumed like S2A_TTTTTT_* where TTTTTT is the product type to be extracted  
-      prodTypeName=$( echo ${productName:4:6} )
-      [ -z "${prodTypeName}" ] && return ${ERR_GETPRODTYPE}
-      # log the value, it helps debugging.
-      # the log entry is available in the process stderr
+      #filename="${retrievedProduct##*/}"; ext="${filename#*.}"	
+      ciop-log "INFO" "retrieved product is ${retrievedProduct}"
+        
+ 	#tar xf $retrievedProduct
+      full_name=($( (find $retrievedProduct -type d -name "S2*.SAFE") ))
+      check_name=$( basename "$full_name" )
+
+      ciop-log "INFO" "Fullname is $check_name"
+      prodTypeName=${check_name:4:6}
+      ciop-log "INFO" "Product type is ${prodTypeName}"
       ciop-log "DEBUG" "Retrieved product type: ${prodTypeName}"
       [ $prodTypeName != "MSIL1C" ] && return $ERR_WRONGPRODTYPE
-   
   fi
 
   if [ ${mission} = "Landsat-8" ]; then
@@ -320,7 +324,9 @@ function mission_prod_retrieval(){
         prod_basename_substr_5=${prod_basename:0:5}
 	prod_basename_substr_9=${prod_basename:0:9}
 	prod_basename_substr_8=${prod_basename:0:8}
-        [ "${prod_basename_substr_3}" = "S1A" ] && mission="Sentinel-1"
+        prod_basename_substr_10=${prod_basename:0:10}
+
+	[ "${prod_basename_substr_3}" = "S1A" ] && mission="Sentinel-1"
         [ "${prod_basename_substr_3}" = "S1B" ] && mission="Sentinel-1"
         [ "${prod_basename_substr_3}" = "S2A" ] && mission="Sentinel-2"
         [ "${prod_basename_substr_3}" = "S2B" ] && mission="Sentinel-2"
@@ -334,6 +340,8 @@ function mission_prod_retrieval(){
 	[ "${prod_basename_substr_5}" = "CHART" ] && mission="Pleiades"
         [ "${prod_basename_substr_5}" = "U2007" ] && mission="UK-DMC2"
 	[ "${prod_basename_substr_5}" = "ORTHO" ] && mission="UK-DMC2"
+        [ "${prod_basename_substr_10}" = "SENTINEL_2" ] && mission="Sentinel-2"
+
         ukdmc2_test=$(echo "${prod_basename}" | grep "UK-DMC-2")
         [ "${ukdmc2_test}" = "" ] || mission="UK-DMC-2"
         if [[ "${prod_basename_substr_8}" == "RESURS_P" ]] || [[ "${prod_basename_substr_8}" == "RESURS-P" ]] || [[ "${prod_basename_substr_8}" == "Resurs-P" ]] || [[ "${prod_basename_substr_8}" == "Resurs_P" ]] ; then
