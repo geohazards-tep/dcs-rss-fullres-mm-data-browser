@@ -29,6 +29,8 @@ ERR_WRONGPOLARIZATION=14
 ERR_METADATA=15
 ERR_OTB=16
 ERR_PAN=17
+ERR_GET_BANDS_NUM=18
+
 
 # add a trap to exit gracefully
 function cleanExit ()
@@ -55,6 +57,7 @@ function cleanExit ()
         ${ERR_METADATA}) 	  msg="Error while generating metadata";;
         ${ERR_OTB})          	  msg="Orfeo Toolbox failed to process";;
 	${ERR_PAN})               msg="The Panchromatic product of this mission is not supported";;
+        ${ERR_GET_BANDS_NUM})     msg="Error while getting number of bands from tif product";;
         *)                        msg="Unknown error";;
     esac
 
@@ -1103,24 +1106,37 @@ function generate_full_res_tif (){
       if [[ "${mission}" == "Resurs-P" ]] ; then
           tif_file=$(find ${retrievedProduct} -name '*.tiff')
       elif  [[ "${mission}" == "Kanopus-V" ]] ; then
-          tif_file=$(find ${retrievedProduct} -name '*.tiff' | grep '/MSS/' )
+          tif_file=$(find ${retrievedProduct} -name '*.tiff')
       fi
-      ciop-log "INFO" "Processing Tiff file: $tif_file"
-      ciop-log "INFO" "Running gdal_translate"
+      tif2check=""
+      # check if there are more than one tif (case when also the panchromatic product is present)
+      tifProdArr=($tif_file)
+      tifProdArr_num=${#tifProdArr[@]}
+      if [ $tifProdArr_num -eq 0 ]; then
+          ciop-log "ERROR" "No tif product found"
+          return ${ERR_CONVERT}
+      elif [ $tifProdArr_num -eq 1 ]; then
+          tif2check=${tif_file}
+      # get multispectral product as default
+      else
+          let "tifProdArr_num-=1"
+          for idTmp in `seq 0 $tifProdArr_num`;
+          do
+              num_bands=$(get_bands_num_tif "${tifProdArr[$idTmp]}")
+              retCode=$?
+              [ $retCode -eq 0 ] || return ${retCode}
+              if [ $num_bands -gt 1 ]; then
+                  tif2check=${tifProdArr[$idTmp]}
+                  break
+              fi
+          done
+      fi
+      bandsNum=$(get_bands_num_tif "${tif2check}")
+      retCode=$?
+      [ $retCode -eq 0 ] || return ${retCode}
+      [ $bandsNum -eq 1 ] && return ${ERR_PAN} || tif_file=${tif2check}
       outputfile=${tif_file##*/}; outputfile=${outputfile%.tiff}.tif
-      gdal_translate -ot Byte -of GTiff -b 3 -b 2 -b 1 -scale -co "TILED=YES" -co "BLOCKXSIZE=512" -co "BLOCKYSIZE=512" -co "PHOTOMETRIC=RGB" -co "ALPHA=YES" $tif_file temp-outputfile.tif > stdout.txt 2>&1
-      returnCode=$?
-      [ $DEBUG -eq 1 ] && cat stdout.txt
-      # in case of error check if it is due to a false multispectral product
-      # (i.e. a product with only 1 band)
-      if [ $returnCode -ne 0 ]; then
-          one_band_test=$(cat stdout.txt | grep "only bands 1 to 1 available")
-          rm stdout.txt
-          [ "${one_band_test}" = "" ] && return ${ERR_CONVERT} || return ${ERR_PAN}
-      fi
-      # rm temp files
-      rm stdout.txt
-      rm temp-outputfile.tif
+      ciop-log "INFO" "Processing Tiff file: $tif_file"
       # histogram skip (percentiles from 2 to 96) on separated bands
       python $_CIOP_APPLICATION_PATH/data_download_publish/hist_skip_no_zero.py "${tif_file}" 3 2 96 "temp-outputfile_band_r.tif"
       python $_CIOP_APPLICATION_PATH/data_download_publish/hist_skip_no_zero.py "${tif_file}" 2 2 96 "temp-outputfile_band_g.tif"
@@ -1307,6 +1323,31 @@ function generate_full_res_tif (){
 
 }
 
+
+# Functioon to get number of bands embedded in a tif file
+function get_bands_num_tif() {
+#function call num_bands=$(get_bands_num_tif "${inputTIF}")
+
+# get number of inputs
+inputNum=$#
+# check on number of inputs
+if [ "$inputNum" -ne "1" ] ; then
+    return ${ERR_GET_BANDS_NUM}
+fi
+
+local inputTIF=$1
+local num_bands=0
+# use gdalinfo to get band indexes list and put it in an array
+bandId_list=$(gdalinfo ${inputTIF} | grep Band | sed -n -e 's|^.*Band \(.*\)Block.*|\1|p')
+bandId_array=($bandId_list)
+# number of bands is equal to array size
+num_bands=${#bandId_array[@]}
+[ $num_bands -gt 0 ] && {
+    echo "${num_bands}"
+    return 0
+} || return ${ERR_GET_BANDS_NUM}
+
+}
 
 function create_snap_request_cal_ml_tc_db_scale_byte_rs2(){
 
