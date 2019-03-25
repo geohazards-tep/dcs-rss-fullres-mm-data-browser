@@ -95,7 +95,9 @@ function check_product_type() {
       prodTypeName=${check_name:4:6}
       ciop-log "INFO" "Product type is ${prodTypeName}"
       ciop-log "DEBUG" "Retrieved product type: ${prodTypeName}"
-      [ $prodTypeName != "MSIL1C" ] && return $ERR_WRONGPRODTYPE
+      if [ $prodTypeName != "MSIL1C" ] && [[ "$prodTypeName" != "MSIL2A" ]] ; then
+	 return $ERR_WRONGPRODTYPE
+      fi
   fi
 
   if [ ${mission} = "Landsat-8" ]; then
@@ -1003,9 +1005,8 @@ function generate_full_res_tif (){
           img=$(find ${retrievedProduct}/ -name ${productName}.tif)
            
           # linear stretching between values tailored on mission data
-          local minVal=1
-          local maxVal=500
-          python $_CIOP_APPLICATION_PATH/data_download_publish/linear_stretch.py "${img}" 1 "${minVal}" "${maxVal}" "temp-outputfile.tif"
+          python $_CIOP_APPLICATION_PATH/data_download_publish/hist_skip_no_zero.py "${img}" 1 2 96 "temp-outputfile.tif"
+
           ciop-log "INFO" "Reprojecting and alpha band addition to "$mission" image: $img"
           outputfile=${TMPDIR}/${productName}.tif
           # re-projection
