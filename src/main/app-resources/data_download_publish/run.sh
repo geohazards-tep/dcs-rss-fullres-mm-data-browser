@@ -29,6 +29,8 @@ ERR_WRONGPOLARIZATION=14
 ERR_METADATA=15
 ERR_OTB=16
 ERR_PAN=17
+ERR_GET_BANDS_NUM=18
+
 
 # add a trap to exit gracefully
 function cleanExit ()
@@ -55,6 +57,7 @@ function cleanExit ()
         ${ERR_METADATA}) 	  msg="Error while generating metadata";;
         ${ERR_OTB})          	  msg="Orfeo Toolbox failed to process";;
 	${ERR_PAN})               msg="The Panchromatic product of this mission is not supported";;
+        ${ERR_GET_BANDS_NUM})     msg="Error while getting number of bands from tif product";;
         *)                        msg="Unknown error";;
     esac
 
@@ -81,14 +84,20 @@ function check_product_type() {
   fi
 
   if [ ${mission} = "Sentinel-2"  ] ; then
-      # productName assumed like S2A_TTTTTT_* where TTTTTT is the product type to be extracted  
-      prodTypeName=$( echo ${productName:4:6} )
-      [ -z "${prodTypeName}" ] && return ${ERR_GETPRODTYPE}
-      # log the value, it helps debugging.
-      # the log entry is available in the process stderr
+      #filename="${retrievedProduct##*/}"; ext="${filename#*.}"	
+      ciop-log "INFO" "retrieved product is ${retrievedProduct}"
+        
+ 	#tar xf $retrievedProduct
+      full_name=($( (find $retrievedProduct -type d -name "S2*.SAFE") ))
+      check_name=$( basename "$full_name" )
+
+      ciop-log "INFO" "Fullname is $check_name"
+      prodTypeName=${check_name:4:6}
+      ciop-log "INFO" "Product type is ${prodTypeName}"
       ciop-log "DEBUG" "Retrieved product type: ${prodTypeName}"
-      [ $prodTypeName != "MSIL1C" ] && return $ERR_WRONGPRODTYPE
-   
+      if [ $prodTypeName != "MSIL1C" ] && [[ "$prodTypeName" != "MSIL2A" ]] ; then
+	 return $ERR_WRONGPRODTYPE
+      fi
   fi
 
   if [ ${mission} = "Landsat-8" ]; then
@@ -320,19 +329,24 @@ function mission_prod_retrieval(){
         prod_basename_substr_5=${prod_basename:0:5}
 	prod_basename_substr_9=${prod_basename:0:9}
 	prod_basename_substr_8=${prod_basename:0:8}
-        [ "${prod_basename_substr_3}" = "S1A" ] && mission="Sentinel-1"
+        prod_basename_substr_10=${prod_basename:0:10}
+
+	[ "${prod_basename_substr_3}" = "S1A" ] && mission="Sentinel-1"
         [ "${prod_basename_substr_3}" = "S1B" ] && mission="Sentinel-1"
         [ "${prod_basename_substr_3}" = "S2A" ] && mission="Sentinel-2"
         [ "${prod_basename_substr_3}" = "S2B" ] && mission="Sentinel-2"
         [ "${prod_basename_substr_3}" = "K5_" ] && mission="Kompsat-5"
         [ "${prod_basename_substr_3}" = "K3_" ] && mission="Kompsat-3"
 	[ "${prod_basename_substr_3}" = "LC8" ] && mission="Landsat-8"
+        [ "${prod_basename_substr_4}" = "LC08" ] && mission="Landsat-8"
         [ "${prod_basename_substr_4}" = "LS08" ] && mission="Landsat-8"
         [ "${prod_basename_substr_4}" = "MSC_" ] && mission="Kompsat-2"
         [ "${prod_basename_substr_4}" = "FCGC" ] && mission="Pleiades"
 	[ "${prod_basename_substr_5}" = "CHART" ] && mission="Pleiades"
         [ "${prod_basename_substr_5}" = "U2007" ] && mission="UK-DMC2"
 	[ "${prod_basename_substr_5}" = "ORTHO" ] && mission="UK-DMC2"
+        [ "${prod_basename_substr_10}" = "SENTINEL_2" ] && mission="Sentinel-2"
+
         ukdmc2_test=$(echo "${prod_basename}" | grep "UK-DMC-2")
         [ "${ukdmc2_test}" = "" ] || mission="UK-DMC-2"
         if [[ "${prod_basename_substr_8}" == "RESURS_P" ]] || [[ "${prod_basename_substr_8}" == "RESURS-P" ]] || [[ "${prod_basename_substr_8}" == "Resurs-P" ]] || [[ "${prod_basename_substr_8}" == "Resurs_P" ]] ; then
@@ -972,11 +986,7 @@ function generate_full_res_tif (){
 	      ciop-log "INFO" "Scaling and alpha band addition to "$mission" image: $img"
               # histogram skip (percentiles from 2 to 95) on separated bands
               python $_CIOP_APPLICATION_PATH/data_download_publish/hist_skip_no_zero.py "temp-outputfile2.tif" 1 2 98 "temp-outputfile3.tif"
-
-	      #gdal_translate -scale -ot Byte -co "TILED=YES" -co "BLOCKXSIZE=512" -co "BLOCKYSIZE=512" -co "ALPHA=YES" temp-outputfile2.tif temp-outputfile3.tif
-	      #returnCode=$?
-              #[ $returnCode -eq 0 ] || return ${ERR_CONVERT}		   
- 
+              # reprojection
 	      gdalwarp -ot Byte -srcnodata 0 -dstnodata 0 -dstalpha -co "TILED=YES" -co "BLOCKXSIZE=512" -co "BLOCKYSIZE=512" -co "ALPHA=YES" -t_srs EPSG:3857 temp-outputfile3.tif ${OUTPUTDIR}/${img}
 	      returnCode=$?
               [ $returnCode -eq 0 ] || return ${ERR_CONVERT}
@@ -995,9 +1005,8 @@ function generate_full_res_tif (){
           img=$(find ${retrievedProduct}/ -name ${productName}.tif)
            
           # linear stretching between values tailored on mission data
-          local minVal=1
-          local maxVal=500
-          python $_CIOP_APPLICATION_PATH/data_download_publish/linear_stretch.py "${img}" 1 "${minVal}" "${maxVal}" "temp-outputfile.tif"
+          python $_CIOP_APPLICATION_PATH/data_download_publish/hist_skip_no_zero.py "${img}" 1 2 96 "temp-outputfile.tif"
+
           ciop-log "INFO" "Reprojecting and alpha band addition to "$mission" image: $img"
           outputfile=${TMPDIR}/${productName}.tif
           # re-projection
@@ -1047,28 +1056,11 @@ function generate_full_res_tif (){
                 returnCode=$?
                 [ $returnCode -eq 0 ] || return ${ERR_CONVERT}
 
-                ciop-log "INFO" "Converting to dB "$mission" image: $img"
-                #prepare snap request file for linear to dB conversion
-                SNAP_REQUEST=$( create_snap_request_linear_to_dB "temp-outputfile.tif" "temp-outputfile2.tif" )
-                [ $? -eq 0 ] || return ${SNAP_REQUEST_ERROR}
-                [ $DEBUG -eq 1 ] && cat ${SNAP_REQUEST}
-                # invoke the ESA SNAP toolbox
-                gpt ${SNAP_REQUEST} -c "${CACHE_SIZE}" &> /dev/null
-                # check the exit code
-                [ $? -eq 0 ] || return $ERR_SNAP
-
                 ciop-log "INFO" "Scaling and alpha band addition to "$mission" image: $img"
-                #extract min max to avoid full white image issue
-                tiffProduct=temp-outputfile2.tif
-                sourceBandName=band_1
-                min_max=$( extract_min_max $tiffProduct $sourceBandName )
-                [ $? -eq 0 ] || return ${ERR_CONVERT}
-                # since min_max is like "minValue" "maxValue" these space separated strings can be directly given to gdal_translate
-                gdal_translate -scale ${min_max} -ot Byte -co "TILED=YES" -co "BLOCKXSIZE=512" -co "BLOCKYSIZE=512" -co "ALPHA=YES" temp-outputfile2.tif temp-outputfile3.tif
-                returnCode=$?
-                [ $returnCode -eq 0 ] || return ${ERR_CONVERT}
-
-                gdalwarp -ot Byte -srcnodata 0 -dstnodata 0 -dstalpha -co "TILED=YES" -co "BLOCKXSIZE=512" -co "BLOCKYSIZE=512" -co "ALPHA=YES" -t_srs EPSG:3857 temp-outputfile3.tif ${OUTPUTDIR}/${img}
+                # histogram skip (percentiles from 2 to 96) 
+                python $_CIOP_APPLICATION_PATH/data_download_publish/hist_skip_no_zero.py "temp-outputfile.tif" 1 2 96 "temp-outputfile2.tif"
+                # reprojection
+                gdalwarp -ot Byte -srcnodata 0 -dstnodata 0 -dstalpha -co "TILED=YES" -co "BLOCKXSIZE=512" -co "BLOCKYSIZE=512" -co "ALPHA=YES" -t_srs EPSG:3857 temp-outputfile2.tif ${OUTPUTDIR}/${img}
                 returnCode=$?
                 [ $returnCode -eq 0 ] || return ${ERR_CONVERT}
                 rm -f temp-outputfile*
@@ -1115,24 +1107,37 @@ function generate_full_res_tif (){
       if [[ "${mission}" == "Resurs-P" ]] ; then
           tif_file=$(find ${retrievedProduct} -name '*.tiff')
       elif  [[ "${mission}" == "Kanopus-V" ]] ; then
-          tif_file=$(find ${retrievedProduct} -name '*.tiff' | grep '/MSS/' )
+          tif_file=$(find ${retrievedProduct} -name '*.tiff')
       fi
-      ciop-log "INFO" "Processing Tiff file: $tif_file"
-      ciop-log "INFO" "Running gdal_translate"
+      tif2check=""
+      # check if there are more than one tif (case when also the panchromatic product is present)
+      tifProdArr=($tif_file)
+      tifProdArr_num=${#tifProdArr[@]}
+      if [ $tifProdArr_num -eq 0 ]; then
+          ciop-log "ERROR" "No tif product found"
+          return ${ERR_CONVERT}
+      elif [ $tifProdArr_num -eq 1 ]; then
+          tif2check=${tif_file}
+      # get multispectral product as default
+      else
+          let "tifProdArr_num-=1"
+          for idTmp in `seq 0 $tifProdArr_num`;
+          do
+              num_bands=$(get_bands_num_tif "${tifProdArr[$idTmp]}")
+              retCode=$?
+              [ $retCode -eq 0 ] || return ${retCode}
+              if [ $num_bands -gt 1 ]; then
+                  tif2check=${tifProdArr[$idTmp]}
+                  break
+              fi
+          done
+      fi
+      bandsNum=$(get_bands_num_tif "${tif2check}")
+      retCode=$?
+      [ $retCode -eq 0 ] || return ${retCode}
+      [ $bandsNum -eq 1 ] && return ${ERR_PAN} || tif_file=${tif2check}
       outputfile=${tif_file##*/}; outputfile=${outputfile%.tiff}.tif
-      gdal_translate -ot Byte -of GTiff -b 3 -b 2 -b 1 -scale -co "TILED=YES" -co "BLOCKXSIZE=512" -co "BLOCKYSIZE=512" -co "PHOTOMETRIC=RGB" -co "ALPHA=YES" $tif_file temp-outputfile.tif > stdout.txt 2>&1
-      returnCode=$?
-      [ $DEBUG -eq 1 ] && cat stdout.txt
-      # in case of error check if it is due to a false multispectral product
-      # (i.e. a product with only 1 band)
-      if [ $returnCode -ne 0 ]; then
-          one_band_test=$(cat stdout.txt | grep "only bands 1 to 1 available")
-          rm stdout.txt
-          [ "${one_band_test}" = "" ] && return ${ERR_CONVERT} || return ${ERR_PAN}
-      fi
-      # rm temp files
-      rm stdout.txt
-      rm temp-outputfile.tif
+      ciop-log "INFO" "Processing Tiff file: $tif_file"
       # histogram skip (percentiles from 2 to 96) on separated bands
       python $_CIOP_APPLICATION_PATH/data_download_publish/hist_skip_no_zero.py "${tif_file}" 3 2 96 "temp-outputfile_band_r.tif"
       python $_CIOP_APPLICATION_PATH/data_download_publish/hist_skip_no_zero.py "${tif_file}" 2 2 96 "temp-outputfile_band_g.tif"
@@ -1319,6 +1324,31 @@ function generate_full_res_tif (){
 
 }
 
+
+# Functioon to get number of bands embedded in a tif file
+function get_bands_num_tif() {
+#function call num_bands=$(get_bands_num_tif "${inputTIF}")
+
+# get number of inputs
+inputNum=$#
+# check on number of inputs
+if [ "$inputNum" -ne "1" ] ; then
+    return ${ERR_GET_BANDS_NUM}
+fi
+
+local inputTIF=$1
+local num_bands=0
+# use gdalinfo to get band indexes list and put it in an array
+bandId_list=$(gdalinfo ${inputTIF} | grep Band | sed -n -e 's|^.*Band \(.*\)Block.*|\1|p')
+bandId_array=($bandId_list)
+# number of bands is equal to array size
+num_bands=${#bandId_array[@]}
+[ $num_bands -gt 0 ] && {
+    echo "${num_bands}"
+    return 0
+} || return ${ERR_GET_BANDS_NUM}
+
+}
 
 function create_snap_request_cal_ml_tc_db_scale_byte_rs2(){
 
