@@ -801,7 +801,7 @@ function generate_full_res_tif (){
 		ciop-log "INFO" "The target dim file is: ${target}"
 		
 		SNAP_REQUEST=$( create_snap_request_rad2refl_reproj_s3 "${target}" "${retrieved_xml}" )
-		      [ $? -eq 0 ] || return ${SNAP_REQUEST_ERROR}
+		[ $? -eq 0 ] || return ${SNAP_REQUEST_ERROR}
 	        [ $DEBUG -eq 1 ] && cat ${SNAP_REQUEST}
         	  # report activity in the log
          	ciop-log "INFO" "Generated request file: ${SNAP_REQUEST}"
@@ -826,26 +826,18 @@ EOF
 		[ $? -eq 0 ] || return $ERR_PCONVERT
 		# output of pconvert
 		pconvertOutRgbCompositeTIF=${TMPDIR}/${productName}.tif
-		python $_CIOP_APPLICATION_PATH/data_download_publish/hist_skip_no_zero.py "${pconvertOutRgbCompositeTIF}" 1 2 96 "temp-outputfile_band_r.tif"
-	        python $_CIOP_APPLICATION_PATH/data_download_publish/hist_skip_no_zero.py "${pconvertOutRgbCompositeTIF}" 2 2 96 "temp-outputfile_band_g.tif"
-      		python $_CIOP_APPLICATION_PATH/data_download_publish/hist_skip_no_zero.py "${pconvertOutRgbCompositeTIF}" 3 2 96 "temp-outputfile_band_b.tif"
-		gdal_merge.py -separate -n 0 -a_nodata 0 -co "PHOTOMETRIC=RGB" -co "ALPHA=YES" "temp-outputfile_band_r.tif" "temp-outputfile_band_g.tif" "temp-outputfile_band_b.tif" -o ${TMPDIR}/temp-outputfile.tif
-		input_gdal_translate=${TMPDIR}/temp-outputfile.tif
+		#Final product name
 	 	rgbCompositeNameFullResTIF=${OUTPUTDIR}/${productName}.rgb.tif
 		# remove corrupted alpha band through gdal_translate
-		gdal_translate -ot Byte -of GTiff -b 1 -b 2 -b 3 -co "TILED=YES" -co "BLOCKXSIZE=512" -co "BLOCKYSIZE=512" -co "PHOTOMETRIC=RGB" ${input_gdal_translate} ${rgbCompositeNameFullResTIF}
+		gdal_translate -ot Byte -of GTiff -b 1 -b 2 -b 3 -co "TILED=YES" -co "BLOCKXSIZE=512" -co "BLOCKYSIZE=512" -co "PHOTOMETRIC=RGB" ${pconvertOutRgbCompositeTIF} ${rgbCompositeNameFullResTIF}
 		returnCode=$?
 		[ $returnCode -eq 0 ] || return ${ERR_CONVERT}
 	
-		# reprojection
-		#gdalwarp -ot Byte -t_srs EPSG:3857 -srcnodata 0 -dstnodata 0 -dstalpha -co "TILED=YES" -co "BLOCKXSIZE=512" -co "BLOCKYSIZE=512" -co "PHOTOMETRIC=RGB" -co "ALPHA=YES" temp-outputfile.tif ${rgbCompositeNameFullResTIF}
-		returnCode=$?
-		[ $returnCode -eq 0 ] || return ${ERR_CONVERT}
 		# Add overviews
 		gdaladdo -r average ${rgbCompositeNameFullResTIF} 2 4 8 16
 		returnCode=$?
 		[ $returnCode -eq 0 ] || return ${ERR_CONVERT}
-		rm ${pconvertOutRgbCompositeTIF} ${target} ${input_gdal_translate}
+		rm ${pconvertOutRgbCompositeTIF} ${target}
   fi
 
   if [ ${mission} = "Landsat-8" ]; then
