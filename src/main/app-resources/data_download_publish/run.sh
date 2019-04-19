@@ -95,8 +95,22 @@ function check_product_type() {
       prodTypeName=${check_name:4:6}
       ciop-log "INFO" "Product type is ${prodTypeName}"
       ciop-log "DEBUG" "Retrieved product type: ${prodTypeName}"
-      [ $prodTypeName != "MSIL1C" ] && return $ERR_WRONGPRODTYPE
+      if [ $prodTypeName != "MSIL1C" ] && [[ "$prodTypeName" != "MSIL2A" ]] ; then
+	 return $ERR_WRONGPRODTYPE
+      fi
   fi
+
+  if [ ${mission} = "Sentinel-3" ] ; then
+        ciop-log "INFO" "retrieved product is ${productName}"
+
+	prodTypeName=$( echo ${productName:9:3} )
+        ciop-log "INFO" "retrieved product is type: ${prodTypeName}"
+        if [ $prodTypeName != "EFR" ] && [ $prodTypeName != "ERR" ]; then
+           return $ERR_WRONGPRODTYPE
+        fi
+
+  fi
+
 
   if [ ${mission} = "Landsat-8" ]; then
       #Extract metadata file from Landsat
@@ -333,6 +347,8 @@ function mission_prod_retrieval(){
         [ "${prod_basename_substr_3}" = "S1B" ] && mission="Sentinel-1"
         [ "${prod_basename_substr_3}" = "S2A" ] && mission="Sentinel-2"
         [ "${prod_basename_substr_3}" = "S2B" ] && mission="Sentinel-2"
+        [ "${prod_basename_substr_3}" = "S3A" ] && mission="Sentinel-3"
+        [ "${prod_basename_substr_3}" = "S3B" ] && mission="Sentinel-3"
         [ "${prod_basename_substr_3}" = "K5_" ] && mission="Kompsat-5"
         [ "${prod_basename_substr_3}" = "K3_" ] && mission="Kompsat-3"
 	[ "${prod_basename_substr_3}" = "LC8" ] && mission="Landsat-8"
@@ -775,6 +791,55 @@ function generate_full_res_tif (){
 
   fi
 
+  if [ ${mission} = "Sentinel-3" ]; then
+	ciop-log "INFO" "Making full resolution tif for ${mission}"
+	#retrieve XML file for Sentinel 3 image
+			## Create RGB composite Sentinel 3
+		retrieved_xml=$(find ${retrievedProduct}/ -name '*.xml' )
+		ciop-log "INFO" "The retrieved xml file is: ${retrieved_xml}"
+		target=${TMPDIR}/${productName}.tif
+		ciop-log "INFO" "The target dim file is: ${target}"
+		
+		SNAP_REQUEST=$( create_snap_request_rad2refl_reproj_s3 "${target}" "${retrieved_xml}" )
+		[ $? -eq 0 ] || return ${SNAP_REQUEST_ERROR}
+	        [ $DEBUG -eq 1 ] && cat ${SNAP_REQUEST}
+        	  # report activity in the log
+         	ciop-log "INFO" "Generated request file: ${SNAP_REQUEST}"
+        	  # report activity in the log
+         	ciop-log "INFO" "Invoking SNAP-gpt on the generated request file for radiance to reflectance calculation and reprojection"
+          	# invoke the ESA SNAP toolbox
+          	gpt $SNAP_REQUEST -c "${CACHE_SIZE}" &> /dev/null
+          	# check the exit code
+          	[ $? -eq 0 ] || return $ERR_SNAP
+		# edit on the fly the RGB image profile file that will be applied by pconvert
+		cat << EOF > ${TMPDIR}/Sentinel3_fullres.rgb
+#RGB-Image Profile
+#Fri Mar 23 16:46:55 CET 2018
+name=Sentinel3_fullres
+blue=log(0.05 + 0.07 * Oa01_reflectance + 0.28 * Oa02_reflectance + 1.77 * Oa03_reflectance + 0.47 * Oa04_reflectance + 0.16 * Oa05_reflectance)
+green=log(0.05 + 0.26 * Oa03_reflectance + 0.21 * Oa04_reflectance + 0.50 * Oa05_reflectance + Oa06_reflectance + 0.38 * Oa07_reflectance + 0.04 * Oa08_reflectance + 0.03 * Oa09_reflectance + 0.02 * Oa10_reflectance)
+red=log(0.05 + 0.01 * Oa01_reflectance + 0.09 * Oa02_reflectance + 0.35 * Oa03_reflectance + 0.04 * Oa04_reflectance + 0.01 * Oa05_reflectance + 0.59 * Oa06_reflectance + 0.85 * Oa07_reflectance + 0.12 * Oa08_reflectance + 0.07 * Oa09_reflectance + 0.04 * Oa10_reflectance)
+EOF
+		# Full Resolution product 8 bit encoded 
+		pconvert -f tif -p ${TMPDIR}/Sentinel3_fullres.rgb -s 0,0 -o ${TMPDIR} ${target} &> /dev/null
+		# check the exit 
+		[ $? -eq 0 ] || return $ERR_PCONVERT
+		# output of pconvert
+		pconvertOutRgbCompositeTIF=${TMPDIR}/${productName}.tif
+		#Final product name
+	 	rgbCompositeNameFullResTIF=${OUTPUTDIR}/${productName}.rgb.tif
+		# remove corrupted alpha band through gdal_translate
+		gdal_translate -ot Byte -of GTiff -b 1 -b 2 -b 3 -co "TILED=YES" -co "BLOCKXSIZE=512" -co "BLOCKYSIZE=512" -co "PHOTOMETRIC=RGB" ${pconvertOutRgbCompositeTIF} ${rgbCompositeNameFullResTIF}
+		returnCode=$?
+		[ $returnCode -eq 0 ] || return ${ERR_CONVERT}
+	
+		# Add overviews
+		gdaladdo -r average ${rgbCompositeNameFullResTIF} 2 4 8 16
+		returnCode=$?
+		[ $returnCode -eq 0 ] || return ${ERR_CONVERT}
+		rm ${pconvertOutRgbCompositeTIF} ${target}
+  fi
+
   if [ ${mission} = "Landsat-8" ]; then
       #Check if downloaded product is compressed and extract it
       ext="${retrievedProduct##*/}"; ext="${ext#*.}"
@@ -1003,9 +1068,8 @@ function generate_full_res_tif (){
           img=$(find ${retrievedProduct}/ -name ${productName}.tif)
            
           # linear stretching between values tailored on mission data
-          local minVal=1
-          local maxVal=500
-          python $_CIOP_APPLICATION_PATH/data_download_publish/linear_stretch.py "${img}" 1 "${minVal}" "${maxVal}" "temp-outputfile.tif"
+          python $_CIOP_APPLICATION_PATH/data_download_publish/hist_skip_no_zero.py "${img}" 1 2 96 "temp-outputfile.tif"
+
           ciop-log "INFO" "Reprojecting and alpha band addition to "$mission" image: $img"
           outputfile=${TMPDIR}/${productName}.tif
           # re-projection
@@ -1349,6 +1413,121 @@ num_bands=${#bandId_array[@]}
 
 }
 
+function create_snap_request_rad2refl_reproj_s3(){
+
+inputNum=$#
+[ "$inputNum" -ne 2 ] && return ${ERR_PREPROCESS}
+
+local target=$1
+local input=$2
+
+#sets the output filename
+snap_request_filename="${TMPDIR}/$( uuidgen ).xml"
+cat << EOF > ${snap_request_filename}
+<graph id="Graph">
+  <version>1.0</version>
+  <node id="Read">
+    <operator>Read</operator>
+    <sources/>
+    <parameters class="com.bc.ceres.binding.dom.XppDomElement">
+      <file>${input}</file>
+    </parameters>
+  </node>
+  <node id="Rad2Refl">
+    <operator>Rad2Refl</operator>
+    <sources>
+      <sourceProduct refid="Read"/>
+    </sources>
+    <parameters class="com.bc.ceres.binding.dom.XppDomElement">
+      <sensor>OLCI</sensor>
+      <conversionMode>RAD_TO_REFL</conversionMode>
+      <copyTiePointGrids>false</copyTiePointGrids>
+      <copyFlagBandsAndMasks>false</copyFlagBandsAndMasks>
+      <copyNonSpectralBands>false</copyNonSpectralBands>
+    </parameters>
+  </node>
+  <node id="Reproject">
+    <operator>Reproject</operator>
+    <sources>
+      <sourceProduct refid="Rad2Refl"/>
+    </sources>
+    <parameters class="com.bc.ceres.binding.dom.XppDomElement">
+      <wktFile/>
+      <crs>PROJCS[&quot;WGS 84 / Pseudo-Mercator&quot;, &#xd;
+  GEOGCS[&quot;WGS 84&quot;, &#xd;
+    DATUM[&quot;World Geodetic System 1984&quot;, &#xd;
+      SPHEROID[&quot;WGS 84&quot;, 6378137.0, 298.257223563, AUTHORITY[&quot;EPSG&quot;,&quot;7030&quot;]], &#xd;
+      AUTHORITY[&quot;EPSG&quot;,&quot;6326&quot;]], &#xd;
+    PRIMEM[&quot;Greenwich&quot;, 0.0, AUTHORITY[&quot;EPSG&quot;,&quot;8901&quot;]], &#xd;
+    UNIT[&quot;degree&quot;, 0.017453292519943295], &#xd;
+    AXIS[&quot;Geodetic longitude&quot;, EAST], &#xd;
+    AXIS[&quot;Geodetic latitude&quot;, NORTH], &#xd;
+    AUTHORITY[&quot;EPSG&quot;,&quot;4326&quot;]], &#xd;
+  PROJECTION[&quot;Popular Visualisation Pseudo Mercator&quot;, AUTHORITY[&quot;EPSG&quot;,&quot;1024&quot;]], &#xd;
+  PARAMETER[&quot;semi_minor&quot;, 6378137.0], &#xd;
+  PARAMETER[&quot;latitude_of_origin&quot;, 0.0], &#xd;
+  PARAMETER[&quot;central_meridian&quot;, 0.0], &#xd;
+  PARAMETER[&quot;scale_factor&quot;, 1.0], &#xd;
+  PARAMETER[&quot;false_easting&quot;, 0.0], &#xd;
+  PARAMETER[&quot;false_northing&quot;, 0.0], &#xd;
+  UNIT[&quot;m&quot;, 1.0], &#xd;
+  AXIS[&quot;Easting&quot;, EAST], &#xd;
+  AXIS[&quot;Northing&quot;, NORTH], &#xd;
+  AUTHORITY[&quot;EPSG&quot;,&quot;3857&quot;]]</crs>
+      <resampling>Nearest</resampling>
+      <referencePixelX/>
+      <referencePixelY/>
+      <easting/>
+      <northing/>
+      <orientation/>
+      <pixelSizeX/>
+      <pixelSizeY/>
+      <width/>
+      <height/>
+      <tileSizeX/>
+      <tileSizeY/>
+      <orthorectify>false</orthorectify>
+      <elevationModelName/>
+      <noDataValue>NaN</noDataValue>
+      <includeTiePointGrids>true</includeTiePointGrids>
+      <addDeltaBands>false</addDeltaBands>
+    </parameters>
+  </node>
+  <node id="Write">
+    <operator>Write</operator>
+    <sources>
+      <sourceProduct refid="Reproject"/>
+    </sources>
+    <parameters class="com.bc.ceres.binding.dom.XppDomElement">
+      <file>${target}</file>
+      <formatName>GeoTIFF-BigTIFF</formatName>
+    </parameters>
+  </node>
+  <applicationData id="Presentation">
+    <Description/>
+    <node id="Read">
+            <displayPosition x="37.0" y="134.0"/>
+    </node>
+    <node id="Rad2Refl">
+      <displayPosition x="166.0" y="132.0"/>
+    </node>
+    <node id="Reproject">
+      <displayPosition x="296.0" y="132.0"/>
+    </node>
+    <node id="Write">
+            <displayPosition x="455.0" y="135.0"/>
+    </node>
+  </applicationData>
+</graph>/graph>
+EOF
+
+[ $? -eq 0 ] && {
+        echo "${snap_request_filename}"
+        return 0
+} || return ${SNAP_REQUEST_ERROR}
+
+}
+ 
 function create_snap_request_cal_ml_tc_db_scale_byte_rs2(){
 
 # function call create_snap_request_cal_ml_tc_d "${product_xml}" "${bandCoPol}" "${ml}" "${pixelSpacing}" "${outProd}" 
