@@ -829,15 +829,17 @@ EOF
 		#Final product name
 	 	rgbCompositeNameFullResTIF=${OUTPUTDIR}/${productName}.rgb.tif
 		# remove corrupted alpha band through gdal_translate
-		gdal_translate -ot Byte -of GTiff -b 1 -b 2 -b 3 -co "TILED=YES" -co "BLOCKXSIZE=512" -co "BLOCKYSIZE=512" -co "PHOTOMETRIC=RGB" ${pconvertOutRgbCompositeTIF} ${rgbCompositeNameFullResTIF}
-		returnCode=$?
-		[ $returnCode -eq 0 ] || return ${ERR_CONVERT}
-	
+	        gdal_translate -ot Byte -of GTiff -b 1 -b 2 -b 3 -co "TILED=YES" -co "BLOCKXSIZE=512" -co "BLOCKYSIZE=512" -co "PHOTOMETRIC=RGB" ${pconvertOutRgbCompositeTIF} temp-outputfile.tif
+                returnCode=$?
+                [ $returnCode -eq 0 ] || return ${ERR_CONVERT}
+                               # reprojection
+                gdalwarp -ot Byte -t_srs EPSG:3857 -srcnodata 0 -dstnodata 0 -dstalpha -co "TILED=YES" -co "BLOCKXSIZE=512" -co "BLOCKYSIZE=512" -co "PHOTOMETRIC=RGB" -co "ALPHA=YES" temp-outputfile.tif ${rgbCompositeNameFullResTIF}
+
 		# Add overviews
 		gdaladdo -r average ${rgbCompositeNameFullResTIF} 2 4 8 16
 		returnCode=$?
 		[ $returnCode -eq 0 ] || return ${ERR_CONVERT}
-		rm ${pconvertOutRgbCompositeTIF} ${target}
+		rm ${pconvertOutRgbCompositeTIF} ${target} temp-outputfile.tif
   fi
 
   if [ ${mission} = "Landsat-8" ]; then
