@@ -427,6 +427,129 @@ echo ${acqMode}
 return 0
 }
 
+function create_cloudcover_geotiff_S3() {
+# function call create_cloudcover_geotiff_S3 "${retrieved_xml}" "${outProd}"
+
+# function which creates the actual request from
+# a template and returns the path to the request
+
+#inputNum=$#
+#[ "$inputNum" -ne 2 ] && return ${SNAP_REQUEST_ERROR}
+
+local retrieved_xml=$1
+local outProd=$2
+#sets the output filename
+snap_request_filename="${TMPDIR}/$( uuidgen ).xml"
+
+   cat << EOF > ${snap_request_filename}
+<graph id="Graph">
+  <version>1.0</version>
+  <node id="Read">
+    <operator>Read</operator>
+    <sources/>
+    <parameters class="com.bc.ceres.binding.dom.XppDomElement">
+      <file>${retrieved_xml}</file>
+    </parameters>
+  </node>
+  <node id="Reproject">
+    <operator>Reproject</operator>
+    <sources>
+      <sourceProduct refid="Read"/>
+    </sources>
+    <parameters class="com.bc.ceres.binding.dom.XppDomElement">
+      <wktFile/>
+      <crs>PROJCS[&quot;WGS 84 / Pseudo-Mercator&quot;, &#xd;
+  GEOGCS[&quot;WGS 84&quot;, &#xd;
+    DATUM[&quot;World Geodetic System 1984&quot;, &#xd;
+      SPHEROID[&quot;WGS 84&quot;, 6378137.0, 298.257223563, AUTHORITY[&quot;EPSG&quot;,&quot;7030&quot;]], &#xd;
+      AUTHORITY[&quot;EPSG&quot;,&quot;6326&quot;]], &#xd;
+    PRIMEM[&quot;Greenwich&quot;, 0.0, AUTHORITY[&quot;EPSG&quot;,&quot;8901&quot;]], &#xd;
+    UNIT[&quot;degree&quot;, 0.017453292519943295], &#xd;
+    AXIS[&quot;Geodetic longitude&quot;, EAST], &#xd;
+    AXIS[&quot;Geodetic latitude&quot;, NORTH], &#xd;
+    AUTHORITY[&quot;EPSG&quot;,&quot;4326&quot;]], &#xd;
+  PROJECTION[&quot;Popular Visualisation Pseudo Mercator&quot;, AUTHORITY[&quot;EPSG&quot;,&quot;1024&quot;]], &#xd;
+  PARAMETER[&quot;semi_minor&quot;, 6378137.0], &#xd;
+  PARAMETER[&quot;latitude_of_origin&quot;, 0.0], &#xd;
+  PARAMETER[&quot;central_meridian&quot;, 0.0], &#xd;
+  PARAMETER[&quot;scale_factor&quot;, 1.0], &#xd;
+  PARAMETER[&quot;false_easting&quot;, 0.0], &#xd;
+  PARAMETER[&quot;false_northing&quot;, 0.0], &#xd;
+  UNIT[&quot;m&quot;, 1.0], &#xd;
+  AXIS[&quot;Easting&quot;, EAST], &#xd;
+  AXIS[&quot;Northing&quot;, NORTH], &#xd;
+  AUTHORITY[&quot;EPSG&quot;,&quot;3857&quot;]]</crs>
+      <resampling>Nearest</resampling>
+      <referencePixelX/>
+      <referencePixelY/>
+      <easting/>
+      <northing/>
+      <orientation/>
+      <pixelSizeX/>
+      <pixelSizeY/>
+      <width/>
+      <height/>
+      <tileSizeX/>
+      <tileSizeY/>
+      <orthorectify>false</orthorectify>
+      <elevationModelName/>
+      <noDataValue>NaN</noDataValue>
+      <includeTiePointGrids>true</includeTiePointGrids>
+      <addDeltaBands>false</addDeltaBands>
+    </parameters>
+  </node>
+  <node id="BandMaths">
+    <operator>BandMaths</operator>
+    <sources>
+      <sourceProduct refid="Reproject"/>
+    </sources>
+    <parameters class="com.bc.ceres.binding.dom.XppDomElement">
+      <targetBands>
+        <targetBand>
+          <name>cloudmask</name>
+          <type>float32</type>
+          <expression>quality_flags_bright</expression>
+          <description/>
+          <unit/>
+          <noDataValue>0.0</noDataValue>
+        </targetBand>
+      </targetBands>
+      <variables/>
+    </parameters>
+  </node>
+  <node id="Write">
+    <operator>Write</operator>
+    <sources>
+      <sourceProduct refid="BandMaths"/>
+    </sources>
+    <parameters class="com.bc.ceres.binding.dom.XppDomElement">
+      <file>${outProd}</file>
+      <formatName>GeoTIFF</formatName>
+    </parameters>
+  </node>
+  <applicationData id="Presentation">
+    <Description/>
+    <node id="Read">
+            <displayPosition x="37.0" y="134.0"/>
+    </node>
+    <node id="Reproject">
+      <displayPosition x="151.0" y="135.0"/>
+    </node>
+    <node id="BandMaths">
+      <displayPosition x="271.0" y="137.0"/>
+    </node>
+    <node id="Write">
+            <displayPosition x="512.0" y="144.0"/>
+    </node>
+  </applicationData>
+</graph>
+EOF
+
+    [ $? -eq 0 ] && {
+        echo "${snap_request_filename}"
+        return 0
+    } || return ${SNAP_REQUEST_ERROR}
+}
 
 function create_snap_request_cal_ml_tc_db_scale_byte() {
 
@@ -829,17 +952,42 @@ EOF
 		#Final product name
 	 	rgbCompositeNameFullResTIF=${OUTPUTDIR}/${productName}.rgb.tif
 		# remove corrupted alpha band through gdal_translate
-	        gdal_translate -ot Byte -of GTiff -b 1 -b 2 -b 3 -co "TILED=YES" -co "BLOCKXSIZE=512" -co "BLOCKYSIZE=512" -co "PHOTOMETRIC=RGB" ${pconvertOutRgbCompositeTIF} temp-outputfile.tif
-                returnCode=$?
-                [ $returnCode -eq 0 ] || return ${ERR_CONVERT}
-                               # reprojection
-                gdalwarp -ot Byte -t_srs EPSG:3857 -srcnodata 0 -dstnodata 0 -dstalpha -co "TILED=YES" -co "BLOCKXSIZE=512" -co "BLOCKYSIZE=512" -co "PHOTOMETRIC=RGB" -co "ALPHA=YES" temp-outputfile.tif ${rgbCompositeNameFullResTIF}
-
-		# Add overviews
-		gdaladdo -r average ${rgbCompositeNameFullResTIF} 2 4 8 16
+		gdal_translate -ot Byte -of GTiff -b 1 -b 2 -b 3 -co "TILED=YES" -co "BLOCKXSIZE=512" -co "BLOCKYSIZE=512" -co "PHOTOMETRIC=RGB" ${pconvertOutRgbCompositeTIF} temp-outputfile.tif
 		returnCode=$?
 		[ $returnCode -eq 0 ] || return ${ERR_CONVERT}
-		rm ${pconvertOutRgbCompositeTIF} ${target} temp-outputfile.tif
+	       	# reprojection
+		gdalwarp -ot Byte -t_srs EPSG:3857 -srcnodata 0 -dstnodata 0 -dstalpha -co "TILED=YES" -co "BLOCKXSIZE=512" -co "BLOCKYSIZE=512" -co "PHOTOMETRIC=RGB" -co "ALPHA=YES" temp-outputfile.tif ${rgbCompositeNameFullResTIF}
+		returnCode=$?
+		[ $returnCode -eq 0 ] || return ${ERR_CONVERT}
+		# Add overviews
+		gdaladdo -r average ${rgbCompositeNameFullResTIF} 2 4 8 16
+		#output of snap request file for cloudcover geotiff
+		productName_cloudcover=${productName}_cloudcover
+		cloudcoverProduct=${TMPDIR}/${productName_cloudcover}.tif
+                #Final product name
+                CloudcoverFinalProduct=${OUTPUTDIR}/${productName_cloudcover}.rgb.tif
+		ciop-log "INFO" "Creating snap request file for cloud geotiff with ${retrieved_xml} and ${cloudcoverProduct}"
+		#creation of snap request file for cloudcover geotiff
+                SNAP_REQUEST_cloudcover=$( create_cloudcover_geotiff_S3 "${retrieved_xml}" "${cloudcoverProduct}" )
+		#[$? -eq 0 ] || return ${SNAP_REQUEST_ERROR}
+                [ $DEBUG -eq 1 ] && cat ${SNAP_REQUEST_cloudcover}
+                # report activity in the log
+                ciop-log "INFO" "Generated request file: ${SNAP_REQUEST_cloudcover}"
+                  # report activity in the log
+                ciop-log "INFO" "Invoking SNAP-gpt on the generated request file for producing a cloudcover geotiff"
+                # invoke the ESA SNAP toolbox
+                gpt $SNAP_REQUEST_cloudcover -c "${CACHE_SIZE}" &> /dev/null
+                # check the exit code
+                [ $? -eq 0 ] || return $ERR_SNAP
+ 		
+		
+		
+		gdal_translate -ot Byte -of GTiff -co "TILED=YES" -co "BLOCKXSIZE=512" -co "BLOCKYSIZE=512" -co "PHOTOMETRIC=MINISBLACK" ${cloudcoverProduct} ${CloudcoverFinalProduct}
+                #gdalwarp -ot Byte -t_srs EPSG:3857 -co "TILED=YES" -co "BLOCKXSIZE=512" -co "BLOCKYSIZE=512" -co "PHOTOMETRIC=MINISBLACK" temp-outputfile2.tif ${CloudcoverFinalProduct}
+		gdaladdo -r average ${CloudcoverFinalProduct} 2 4 8 16
+		returnCode=$?
+		[ $returnCode -eq 0 ] || return ${ERR_CONVERT}
+		rm ${pconvertOutRgbCompositeTIF} ${target} temp-outputfile.tif temp-outputfile2.tif
   fi
 
   if [ ${mission} = "Landsat-8" ]; then
@@ -1068,7 +1216,9 @@ EOF
   if [[ "${mission}" == "Kompsat-5" ]]; then
       if [[ -d "${retrievedProduct}" ]]; then
           img=$(find ${retrievedProduct}/ -name ${productName}.tif)
-           
+          #local minVal=1
+          #local maxVal=500
+         # python $_CIOP_APPLICATION_PATH/data_download_publish/linear_stretch.py "${img}" 1 "${minVal}" "${maxVal}" "temp-outputfile.tif"
           # linear stretching between values tailored on mission data
           python $_CIOP_APPLICATION_PATH/data_download_publish/hist_skip_no_zero.py "${img}" 1 2 96 "temp-outputfile.tif"
 
@@ -2060,7 +2210,7 @@ function add_metadata(){
 # get number of inputs
 inputNum=$#
 # check on number of inputs
-if [ "$inputNum" -ne "4" ] ; then
+if [ "$inputNum" -ne "5" ] ; then
     return ${ERR_METADATA}
 fi
 # init variables
@@ -2068,6 +2218,8 @@ local outdir=$1
 local mission=$2
 local prodType=$3
 local ref=$4
+local retrievedProduct=$5
+
 # get product date from input catalogue reference
 startdate="$( opensearch-client -f atom "${ref}" startdate)"
 # check error in query: put empty value in case of errors
@@ -2080,6 +2232,10 @@ res=$?
 [ $res -eq 0 ] || orbitDirection=""
 #  get track number from input catalogue reference
 track="$( opensearch-client -f atom "${ref}" track)"
+# get cloudcover info
+retrieved_xml=$(find ${retrievedProduct}/ -name '*.xml' )
+ciop-log "INFO" "Retrieved xml is ${retrieved_xml}"
+cloudcover="$( xmlstarlet sel -N sentinel3="http://www.esa.int/safe/sentinel/sentinel-3/1.0" --net -t -v '//sentinel3:brightPixels/@percentage' -n "${retrieved_xml}" )"
 # check error in query: put empty value in case of errors
 res=$?
 [ $res -eq 0 ] || track=""
@@ -2097,6 +2253,7 @@ Product\ Type=${prodType}
 Acquisition\ Date=${startdate}
 Orbit\ Direction=${orbitDirection}
 Track\ Number=${track}
+Cloudcover\ Percentage=${cloudcover}
 EOF
 done
 return 0
@@ -2182,7 +2339,7 @@ function main() {
         # NOTE: it is assumed that the "generate_full_res_tif" function always provides results in $OUTPUTDIR
         # report activity in the log
 	ciop-log "INFO" "Adding metadata for ${prodname}"
-        add_metadata ${OUTPUTDIR} ${mission} ${prodType} ${currentProduct}
+        add_metadata ${OUTPUTDIR} ${mission} ${prodType} ${currentProduct} ${retrievedProduct}
         returnCode=$?
         [ $returnCode -eq 0 ] || return $returnCode
         # Publish results 
