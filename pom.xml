@@ -11,7 +11,7 @@
     <version>2.0.0</version>
   </parent>
   <description>Multi-Mission Data Browser service for full resolution data visualisation.</description>
-  <version>1.49.3-SNAPSHOT</version>
+  <version>1.49.4-SNAPSHOT</version>
   <properties>
     <summary>Multi-Mission Data Browser service for full resolution data visualisation.</summary>
     <description>Multi-Mission Data Browser service for full resolution data visualisation.</description>
