@@ -11,7 +11,7 @@
       </defaultJobconf>
     </jobTemplate>
   </jobTemplates>
-  <workflow id="full-res-multi-mission-data-browser" title="Full Resolution Rasterization" abstract="This service allows to generate full resolution RGB (optical) and single-channel (SAR) GeoTiff images from EO data products. The output GeoTiff is displayed in geobrowser with the possibility to access product metadata and download original dataset to be used in further processing. The service supports optical and SAR detected products from the following missions: Pleiades 1A/1B, SPOT-6/-7, Sentinel-2, Landsat 8, UK-DMC 2, Kompsat-2/-3, Kanopus-V, Resurs-P, Terrasar-X, Sentinel-1, ALOS, ALOS-2, Radarsat-2, Rapideye, Deimos-1, VRSS1, GF-2. 
+  <workflow id="full-res-multi-mission-data-browser" title="Full Resolution Rasterization" abstract="This service allows to generate full resolution RGB (optical) and single-channel (SAR) GeoTiff images from EO data products. The output GeoTiff is displayed in geobrowser with the possibility to access product metadata and download original dataset to be used in further processing. The service supports optical and SAR detected products from the following missions: Pleiades 1A/1B, SPOT-6/-7, Sentinel-2, Landsat 8, UK-DMC 2, Kompsat-2/-3, Kanopus-V, Resurs-P, Terrasar-X, Sentinel-1, ALOS, ALOS-2, Radarsat-2, Rapideye, Deimos-1, VRSS1, GF-2, Kompsat-5, Sentinel-3. 
 In case of Sentinel-1 IW data the resolution is 20mx20m in order to increase the number of looks and reduce image size.">
     <workflowVersion>1.0</workflowVersion>
     <node id="node_data_download_publish">
