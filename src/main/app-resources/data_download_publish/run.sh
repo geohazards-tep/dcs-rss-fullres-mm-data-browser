@@ -982,12 +982,12 @@ EOF
  		
 		
 		
-		gdal_translate -ot Byte -of GTiff -co "TILED=YES" -co "BLOCKXSIZE=512" -co "BLOCKYSIZE=512" -co "PHOTOMETRIC=MINISBLACK" ${cloudcoverProduct} ${CloudcoverFinalProduct}
+		gdal_translate -ot Byte -of GTiff -a_nodata 0 -co "ALPHA=YES" -co "TILED=YES" -co "BLOCKXSIZE=512" -co "BLOCKYSIZE=512" -co "PHOTOMETRIC=MINISBLACK" ${cloudcoverProduct} ${CloudcoverFinalProduct}
                 #gdalwarp -ot Byte -t_srs EPSG:3857 -co "TILED=YES" -co "BLOCKXSIZE=512" -co "BLOCKYSIZE=512" -co "PHOTOMETRIC=MINISBLACK" temp-outputfile2.tif ${CloudcoverFinalProduct}
 		gdaladdo -r average ${CloudcoverFinalProduct} 2 4 8 16
 		returnCode=$?
 		[ $returnCode -eq 0 ] || return ${ERR_CONVERT}
-		rm ${pconvertOutRgbCompositeTIF} ${target} temp-outputfile.tif temp-outputfile2.tif
+		rm ${pconvertOutRgbCompositeTIF} ${target} temp-outputfile.tif 
   fi
 
   if [ ${mission} = "Landsat-8" ]; then
