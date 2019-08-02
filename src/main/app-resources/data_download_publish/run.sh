@@ -982,8 +982,8 @@ EOF
  		
 		
 		
-		gdal_translate -ot Byte -of GTiff -a_nodata 0 -co "ALPHA=YES" -co "TILED=YES" -co "BLOCKXSIZE=512" -co "BLOCKYSIZE=512" -co "PHOTOMETRIC=MINISBLACK" ${cloudcoverProduct} ${CloudcoverFinalProduct}
-                #gdalwarp -ot Byte -t_srs EPSG:3857 -co "TILED=YES" -co "BLOCKXSIZE=512" -co "BLOCKYSIZE=512" -co "PHOTOMETRIC=MINISBLACK" temp-outputfile2.tif ${CloudcoverFinalProduct}
+		gdal_translate -ot Byte -of GTiff -a_nodata 0 -co "ALPHA=YES" -co "TILED=YES" -co "BLOCKXSIZE=512" -co "BLOCKYSIZE=512" -co "PHOTOMETRIC=MINISBLACK" ${cloudcoverProduct} temp-outputfile2.tif
+                gdalwarp -ot Byte -t_srs EPSG:3857 -co "TILED=YES" -co "BLOCKXSIZE=512" -co "BLOCKYSIZE=512" -co "PHOTOMETRIC=MINISBLACK" temp-outputfile2.tif ${CloudcoverFinalProduct}
 		gdaladdo -r average ${CloudcoverFinalProduct} 2 4 8 16
 		returnCode=$?
 		[ $returnCode -eq 0 ] || return ${ERR_CONVERT}
