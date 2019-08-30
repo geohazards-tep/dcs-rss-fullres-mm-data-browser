@@ -899,7 +899,7 @@ function generate_full_res_tif (){
           [ $returnCode -eq 0 ] || return ${ERR_CONVERT}
       else
           # translate the jp2 file in GeoTIFF
-          gdal_translate -ot Byte -of GTiff -b 1 -b 2 -b 3 -scale -co "TILED=YES" -co "BLOCKXSIZE=512" -co "BLOCKYSIZE=512" -co "PHOTOMETRIC=RGB" -co "ALPHA=YES" ${tci} temp-outputfile.tif
+          gdal_translate -ot Byte -of GTiff -b 1 -b 2 -b 3 -co "TILED=YES" -co "BLOCKXSIZE=512" -co "BLOCKYSIZE=512" -co "PHOTOMETRIC=RGB" -co "ALPHA=YES" ${tci} temp-outputfile.tif
           #re-projection
           gdalwarp -ot Byte -t_srs EPSG:3857 -srcnodata 0 -dstnodata 0 -dstalpha -co "TILED=YES" -co "BLOCKXSIZE=512" -co "BLOCKYSIZE=512" -co "PHOTOMETRIC=RGB" -co "ALPHA=YES" temp-outputfile.tif ${OUTPUTDIR}/${outputProd}.tif
           returnCode=$?
