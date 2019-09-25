@@ -105,7 +105,7 @@ function check_product_type() {
 
 	prodTypeName=$( echo ${productName:9:3} )
         ciop-log "INFO" "retrieved product is type: ${prodTypeName}"
-        if [ $prodTypeName != "EFR" ] && [ $prodTypeName != "ERR" ]; then
+        if [ $prodTypeName != "EFR" ] && [ $prodTypeName != "ERR" ] && [ $prodTypeName != "RBT" ]; then
            return $ERR_WRONGPRODTYPE
         fi
 
@@ -551,6 +551,167 @@ EOF
     } || return ${SNAP_REQUEST_ERROR}
 }
 
+function create_cloudcover_rbt_s3() {
+
+#Function to retrieve the cloudcover band for S3 RBT
+
+inputNum=$#
+[ "$inputNum" -ne 2 ] && return ${SNAP_REQUEST_ERROR}
+
+local input=$1
+local target=$2
+
+snap_request_filename="${TMPDIR}/$( uuidgen ).xml"
+
+cat << EOF > ${snap_request_filename}
+<graph id="Graph">
+  <version>1.0</version>
+  <node id="Read">
+    <operator>Read</operator>
+    <sources/>
+    <parameters class="com.bc.ceres.binding.dom.XppDomElement">
+      <file>${input}</file>
+      <formatName>Sen3_SLSTRL1B_500m</formatName>	
+    </parameters>
+  </node>
+  <node id="BandMaths">
+    <operator>BandMaths</operator>
+    <sources>
+      <sourceProduct refid="Read"/>
+    </sources>
+    <parameters class="com.bc.ceres.binding.dom.XppDomElement">
+      <targetBands>
+        <targetBand>
+          <name>newBand</name>
+          <type>float32</type>
+          <expression>if cloud_an &gt; 1 then 255 else NaN</expression>
+          <description/>
+          <unit/>
+          <noDataValue>0.0</noDataValue>
+        </targetBand>
+      </targetBands>
+      <variables/>
+    </parameters>
+  </node>
+  <node id="Write">
+    <operator>Write</operator>
+    <sources>
+      <sourceProduct refid="BandMaths"/>
+    </sources>
+    <parameters class="com.bc.ceres.binding.dom.XppDomElement">
+      <file>${target}</file>
+      <formatName>BEAM-DIMAP</formatName>
+    </parameters>
+  </node>
+  <applicationData id="Presentation">
+    <Description/>
+    <node id="Read">
+            <displayPosition x="39.0" y="139.0"/>
+    </node>
+    <node id="BandMaths">
+      <displayPosition x="182.0" y="139.0"/>
+    </node>
+    <node id="Write">
+            <displayPosition x="455.0" y="135.0"/>
+    </node>
+  </applicationData>
+</graph>
+EOF
+
+    [ $? -eq 0 ] && {
+        echo "${snap_request_filename}"
+        return 0
+    } || return ${SNAP_REQUEST_ERROR}
+}
+
+function reproject_sentinel_3() {
+
+#reproject sentinel 3 cloudcover and  rgb and convert to tif
+
+inputNum=$#
+[ "$inputNum" -ne 2 ] && return ${SNAP_REQUEST_ERROR}
+
+local input=$1
+local target=$2
+
+snap_request_filename="${TMPDIR}/$( uuidgen ).xml"
+	cat << EOF > ${snap_request_filename}
+<graph id="Graph">
+  <version>1.0</version>
+  <node id="Read">
+    <operator>Read</operator>
+    <sources/>
+    <parameters class="com.bc.ceres.binding.dom.XppDomElement">
+      <file>${input}</file>
+    </parameters>
+  </node>
+  <node id="Reproject">
+    <operator>Reproject</operator>
+    <sources>
+      <sourceProduct refid="Read"/>
+    </sources>
+    <parameters class="com.bc.ceres.binding.dom.XppDomElement">
+      <wktFile/>
+      <crs>GEOGCS[&quot;WGS84(DD)&quot;, &#xd;
+  DATUM[&quot;WGS84&quot;, &#xd;
+    SPHEROID[&quot;WGS84&quot;, 6378137.0, 298.257223563]], &#xd;
+  PRIMEM[&quot;Greenwich&quot;, 0.0], &#xd;
+  UNIT[&quot;degree&quot;, 0.017453292519943295], &#xd;
+  AXIS[&quot;Geodetic longitude&quot;, EAST], &#xd;
+  AXIS[&quot;Geodetic latitude&quot;, NORTH]]</crs>
+      <resampling>Nearest</resampling>
+      <referencePixelX/>
+      <referencePixelY/>
+      <easting/>
+      <northing/>
+      <orientation/>
+      <pixelSizeX/>
+      <pixelSizeY/>
+      <width/>
+      <height/>
+      <tileSizeX/>
+      <tileSizeY/>
+      <orthorectify>false</orthorectify>
+      <elevationModelName/>
+      <noDataValue>NaN</noDataValue>
+      <includeTiePointGrids>true</includeTiePointGrids>
+      <addDeltaBands>false</addDeltaBands>
+    </parameters>
+  </node>
+  <node id="Write">
+    <operator>Write</operator>
+    <sources>
+      <sourceProduct refid="Reproject"/>
+    </sources>
+    <parameters class="com.bc.ceres.binding.dom.XppDomElement">
+      <file>${target}</file>
+      <formatName>GeoTIFF-BigTIFF</formatName>
+    </parameters>
+  </node>
+  <applicationData id="Presentation">
+    <Description/>
+    <node id="Read">
+            <displayPosition x="37.0" y="134.0"/>
+    </node>
+    <node id="Reproject">
+      <displayPosition x="192.0" y="130.0"/>
+    </node>
+    <node id="Write">
+            <displayPosition x="455.0" y="135.0"/>
+    </node>
+  </applicationData>
+</graph>
+EOF
+
+
+    [ $? -eq 0 ] && {
+        echo "${snap_request_filename}"
+        return 0
+    } || return ${SNAP_REQUEST_ERROR}
+}
+
+
+
 function create_snap_request_cal_ml_tc_db_scale_byte() {
 
 # function call create_snap_request_cal_ml_tc_db_scale_byte "${s1_manifest}" "${bandCoPol}" "${ml_factor}" "${pixelsize}" "${outProd}"
@@ -864,9 +1025,13 @@ function generate_full_res_tif (){
       # output product name
       outputProd=$(basename ${retrievedProduct}) 
       # try to get path of True Color Image file
-      tci=$(find ${retrievedProduct}/ -name '*.jp2' | egrep '*_TCI.jp2$')
-      #if not found then go to backup solution: make image using R=B4 G=B3 B=B2 
+      tci=$(find ${retrievedProduct}/ -name '*.jp2' | egrep '*TCI_10m.jp2$')
       if [ $? -ne 0 ] ; then
+	 tci=$(find ${retrievedProduct}/ -name '*.jp2' | egrep '*_TCI.jp2$')	
+      fi
+      ciop-log "INFO" "The retrieved true color image is: ${tci}"	
+      #if not found then go to backup solution: make image using R=B4 G=B3 B=B2 
+      if [ -z "$tci" ]; then 
           #get full path of S2 product metadata xml file
           # check if it is like S2?_*.xml
           s2_xml=$(find ${retrievedProduct}/ -name '*.xml' | egrep '^.*/S2[A-Z]?_.*.SAFE/S2[A-Z]?_[A-Z0-9]*.xml$') 
@@ -912,12 +1077,116 @@ function generate_full_res_tif (){
           [ $returnCode -eq 0 ] || return ${ERR_CONVERT}
       fi             
 
-  fi
+  fi 
 
   if [ ${mission} = "Sentinel-3" ]; then
-	ciop-log "INFO" "Making full resolution tif for ${mission}"
-	#retrieve XML file for Sentinel 3 image
-			## Create RGB composite Sentinel 3
+        ciop-log "INFO" "retrieved product is ${productName}"
+
+	prodTypeName=$( echo ${productName:9:3} )
+        ciop-log "INFO" "retrieved product is type: ${prodTypeName}"
+        ciop-log "INFO" "Product type = ${prodTypeName}"
+	if [ ${prodTypeName} = "RBT" ]; then
+	#- Raster, make RGB with R: s3_radiance_an, G: s2_radiance_an, B: s1_radiance_an
+		retrieved_xml=$(find ${retrievedProduct}/ -name '*.xml' )
+                ciop-log "INFO" "The retrieved xml file is: ${retrieved_xml}"
+                target=${TMPDIR}/${productName}.tif
+                ciop-log "INFO" "The target dim file is: ${target}"
+                productName_cloudcover=${productName}_cloudcover
+                cloudcoverProduct=${TMPDIR}/${productName_cloudcover}.dim
+		cloudcoverProduct_reproj=${TMPDIR}/${productName_cloudcover}_reproj.tif
+                #Final product name
+                CloudcoverFinalProduct=${OUTPUTDIR}/${productName_cloudcover}.tif
+                ciop-log "INFO" "Creating snap request file for cloud geotiff with ${retrieved_xml} and ${cloudcoverProduct}"
+                #creation of snap request file for cloudcover geotiff
+                SNAP_REQUEST=$( create_cloudcover_rbt_s3 "${retrieved_xml}" "${cloudcoverProduct}" )
+                #[$? -eq 0 ] || return ${SNAP_REQUEST_ERROR}
+                [ $DEBUG -eq 1 ] && cat ${SNAP_REQUEST}
+                # report activity in the log
+                ciop-log "INFO" "Generated request file: ${SNAP_REQUEST}"
+                  # report activity in the log
+                ciop-log "INFO" "Invoking SNAP-gpt on the generated request file for producing a cloudcover geotiff"
+                # invoke the ESA SNAP toolbox
+                gpt $SNAP_REQUEST -c "${CACHE_SIZE}" &> /dev/null
+                # check the exit code
+                [ $? -eq 0 ] || return $ERR_SNAP
+		
+                ciop-log "INFO" "Creating snap request file for cloud geotiff with input ${cloudcoverProduct} and target:${cloudcoverProduct_reproj}"
+                #creation of snap request file for cloudcover geotiff
+                SNAP_REQUEST=$( reproject_sentinel_3 "${cloudcoverProduct}" "${cloudcoverProduct_reproj}" )
+                #[$? -eq 0 ] || return ${SNAP_REQUEST_ERROR}
+                [ $DEBUG -eq 1 ] && cat ${SNAP_REQUEST}
+                # report activity in the log
+                ciop-log "INFO" "Generated request file: ${SNAP_REQUEST}"
+                  # report activity in the log
+                ciop-log "INFO" "Invoking SNAP-gpt on the generated request file for producing a cloudcover geotiff"
+                # invoke the ESA SNAP toolbox
+                gpt $SNAP_REQUEST -c "${CACHE_SIZE}" &> /dev/null
+                # check the exit code
+                [ $? -eq 0 ] || return $ERR_SNAP
+
+		
+		#REPROJECT AND THEN DO NEXT STEPS OF WARP AND TRANSLATE
+		ciop-log "INFO" "Provoking gdal_translate on ${cloudcoverProduct_reproj}"
+                gdal_translate -ot Byte -of GTiff -b 1 -a_nodata 0 -co "TILED=YES" -co "BLOCKXSIZE=512" -co "BLOCKYSIZE=512" -co "PHOTOMETRIC=MINISBLACK" ${cloudcoverProduct_reproj}  temp-outputfile2.tif
+
+                gdalwarp -srcnodata 0 -dstalpha -co "ALPHA=YES" temp-outputfile2.tif ${CloudcoverFinalProduct}
+                gdaladdo -r average ${CloudcoverFinalProduct} 2 4 8 16
+                returnCode=$?
+                [ $returnCode -eq 0 ] || return ${ERR_CONVERT}
+		#SAME FOR FULL RGB, FIRST BANDSELECT, THEN REPROJECT IN SNAP, THEN PCONVERT, THEN GDAL TRANSLATE, WARP AND ADDO	
+		rgbCompositeNameFullResTIF=${OUTPUTDIR}/${productName}.rgb.tif
+		target_bandselect=${TMPDIR}/${productName}_rgb.dim
+                target_reproj=${TMPDIR}/${productName}_rgb_reproj.tif
+                SNAP_REQUEST=$( create_snap_request_bandselect "${target_bandselect}" "${retrieved_xml}" )
+                [ $? -eq 0 ] || return ${SNAP_REQUEST_ERROR}
+                [ $DEBUG -eq 1 ] && cat ${SNAP_REQUEST}
+                # report activity in the log
+                ciop-log "INFO" "Generated request file: ${SNAP_REQUEST}"
+                # report activity in the log
+                ciop-log "INFO" "Invoking SNAP-gpt on the generated request file for radiance to reflectance calculation and reprojection"
+                # invoke the ESA SNAP toolbox
+                gpt $SNAP_REQUEST -c "${CACHE_SIZE}" &> /dev/null
+                # check the exit code
+                [ $? -eq 0 ] || return $ERR_SNAP
+		rgbCompositeNameFullResTIF=${OUTPUTDIR}/${productName}.rgb.tif
+		ciop-log "INFO" "Creating snap request file for rgb geotiff with ${target_bandselect} and ${target_reproj}"
+                #creation of snap request file for cloudcover geotiff
+                SNAP_REQUEST=$( reproject_sentinel_3 "${target_bandselect}" "${target_reproj}" )
+                #[$? -eq 0 ] || return ${SNAP_REQUEST_ERROR}
+                [ $DEBUG -eq 1 ] && cat ${SNAP_REQUEST}
+                # report activity in the log
+                ciop-log "INFO" "Generated request file: ${SNAP_REQUEST}"
+                  # report activity in the log
+                ciop-log "INFO" "Invoking SNAP-gpt on the generated request file for producing a cloudcover geotiff"
+                # invoke the ESA SNAP toolbox
+                gpt $SNAP_REQUEST -c "${CACHE_SIZE}" &> /dev/null
+                # check the exit code
+                [ $? -eq 0 ] || return $ERR_SNAP
+
+
+		ciop-log "INFO" "Setting up p-convert for RBT product"
+                pconvert -b 1,2,3 -f tif -o ${TMPDIR} ${target_reproj}
+		# edit on the fly the RGB image profile file that will be applied by pconvert
+                # check the exit
+                [ $? -eq 0 ] || return $ERR_PCONVERT
+		 # output of pconvert
+                pconvertOutRgbCompositeTIF=${TMPDIR}/${productName}_rgb_reproj.tif
+                #Final product name
+                rgbCompositeNameFullResTIF=${OUTPUTDIR}/${productName}.rgb.tif
+               # remove corrupted alpha band through gdal_translate
+                gdal_translate -ot Byte -of GTiff -b 1 -b 2 -b 3 -co "TILED=YES" -co "BLOCKXSIZE=512" -co "BLOCKYSIZE=512" -co "PHOTOMETRIC=RGB" ${pconvertOutRgbCompositeTIF} temp-outputfile.tif
+                returnCode=$?
+                [ $returnCode -eq 0 ] || return ${ERR_CONVERT}
+                # reprojection
+                gdalwarp -ot Byte -t_srs EPSG:3857 -srcnodata 0 -dstnodata 0 -dstalpha -co "TILED=YES" -co "BLOCKXSIZE=512" -co "BLOCKYSIZE=512" -co "PHOTOMETRIC=RGB" -co "ALPHA=YES" temp-outputfile.tif ${rgbCompositeNameFullResTIF}
+                returnCode=$?
+                [ $returnCode -eq 0 ] || return ${ERR_CONVERT}
+               # Add overviews
+                gdaladdo -r average ${rgbCompositeNameFullResTIF} 2 4 8 16
+	else
+		ciop-log "INFO" "Making full resolution tif for ${mission}"
+		#retrieve XML file for Sentinel 3 image
+		## Create RGB composite Sentinel 3
 		retrieved_xml=$(find ${retrievedProduct}/ -name '*.xml' )
 		ciop-log "INFO" "The retrieved xml file is: ${retrieved_xml}"
 		target=${TMPDIR}/${productName}.tif
@@ -988,6 +1257,7 @@ EOF
 		returnCode=$?
 		[ $returnCode -eq 0 ] || return ${ERR_CONVERT}
 		rm ${pconvertOutRgbCompositeTIF} ${target} temp-outputfile.tif temp-outputfile2.tif
+	fi
   fi
 
   if [ ${mission} = "Landsat-8" ]; then
@@ -1539,7 +1809,158 @@ EOF
 
 }
 
+function create_snap_request_bandselect(){
 
+inputNum=$#
+[ "$inputNum" -ne 2 ] && return ${ERR_PREPROCESS}
+
+local target=$1
+local input=$2
+
+#sets the output filename
+snap_request_filename="${TMPDIR}/$( uuidgen ).xml"
+cat << EOF > ${snap_request_filename}
+<graph id="Graph">
+  <version>1.0</version>
+  <node id="Read">
+    <operator>Read</operator>
+    <sources/>
+    <parameters class="com.bc.ceres.binding.dom.XppDomElement">
+      <file>${input}</file>
+      <formatName>Sen3_SLSTRL1B_500m</formatName>	
+    </parameters>
+  </node>
+  <node id="BandMaths">
+    <operator>BandMaths</operator>
+    <sources>
+      <sourceProduct refid="Read"/>
+    </sources>
+    <parameters class="com.bc.ceres.binding.dom.XppDomElement">
+      <targetBands>
+        <targetBand>
+          <name>S2_radiance_an</name>
+          <type>float32</type>
+          <expression>S2_radiance_an</expression>
+          <description/>
+          <unit/>
+          <noDataValue>0.0</noDataValue>
+        </targetBand>
+      </targetBands>
+      <variables/>
+    </parameters>
+  </node>
+  <node id="BandMaths(2)">
+    <operator>BandMaths</operator>
+    <sources>
+      <sourceProduct refid="Read(2)"/>
+    </sources>
+    <parameters class="com.bc.ceres.binding.dom.XppDomElement">
+      <targetBands>
+        <targetBand>
+          <name>S3_radiance_an</name>
+          <type>float32</type>
+          <expression>S3_radiance_an</expression>
+          <description/>
+          <unit/>
+          <noDataValue>0.0</noDataValue>
+        </targetBand>
+      </targetBands>
+      <variables/>
+    </parameters>
+  </node>
+  <node id="BandMaths(3)">
+    <operator>BandMaths</operator>
+    <sources>
+      <sourceProduct refid="Read(3)"/>
+    </sources>
+    <parameters class="com.bc.ceres.binding.dom.XppDomElement">
+      <targetBands>
+        <targetBand>
+          <name>S5_radiance_an</name>
+          <type>float32</type>
+          <expression>S5_radiance_an</expression>
+          <description/>
+          <unit/>
+          <noDataValue>0.0</noDataValue>
+        </targetBand>
+      </targetBands>
+      <variables/>
+    </parameters>
+  </node>
+  <node id="Read(2)">
+    <operator>Read</operator>
+    <sources/>
+    <parameters class="com.bc.ceres.binding.dom.XppDomElement">
+      <file>${input}</file>
+      <formatName>Sen3_SLSTRL1B_500m</formatName>
+    </parameters>
+  </node>
+  <node id="Read(3)">
+    <operator>Read</operator>
+    <sources/>
+    <parameters class="com.bc.ceres.binding.dom.XppDomElement">
+      <file>${input}</file>
+      <formatName>Sen3_SLSTRL1B_500m</formatName>
+    </parameters>
+  </node>
+  <node id="BandMerge">
+    <operator>BandMerge</operator>
+    <sources>
+      <sourceProduct refid="BandMaths(3)"/>
+      <sourceProduct.1 refid="BandMaths(2)"/>
+      <sourceProduct.2 refid="BandMaths"/>
+    </sources>
+    <parameters class="com.bc.ceres.binding.dom.XppDomElement">
+      <sourceBands/>
+      <geographicError>1.0E-5</geographicError>
+    </parameters>
+  </node>
+  <node id="Write">
+    <operator>Write</operator>
+    <sources>
+      <sourceProduct refid="BandMerge"/>
+    </sources>
+    <parameters class="com.bc.ceres.binding.dom.XppDomElement">
+      <file>${target}</file>
+      <formatName>BEAM-DIMAP</formatName>
+    </parameters>
+  </node>
+  <applicationData id="Presentation">
+    <Description/>
+    <node id="Read">
+            <displayPosition x="37.0" y="134.0"/>
+    </node>
+    <node id="BandMaths">
+      <displayPosition x="176.0" y="138.0"/>
+    </node>
+    <node id="BandMaths(2)">
+      <displayPosition x="143.0" y="210.0"/>
+    </node>
+    <node id="BandMaths(3)">
+      <displayPosition x="147.0" y="284.0"/>
+    </node>
+    <node id="Read(2)">
+      <displayPosition x="41.0" y="204.0"/>
+    </node>
+    <node id="Read(3)">
+      <displayPosition x="47.0" y="276.0"/>
+    </node>
+    <node id="BandMerge">
+      <displayPosition x="336.0" y="185.0"/>
+    </node>
+    <node id="Write">
+            <displayPosition x="455.0" y="135.0"/>
+    </node>
+  </applicationData>
+</graph>
+EOF
+
+[ $? -eq 0 ] && {
+        echo "${snap_request_filename}"
+        return 0
+} || return ${SNAP_REQUEST_ERROR}
+
+}
 # Functioon to get number of bands embedded in a tif file
 function get_bands_num_tif() {
 #function call num_bands=$(get_bands_num_tif "${inputTIF}")
