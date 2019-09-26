@@ -161,6 +161,11 @@ function check_product_type() {
   if [ ${mission} = "Kompsat-3" ]; then
       #naming convention K3_”Time”_”OrbNo”_"PassNo"_”ProcLevel”
       prodTypeName=${productName:(-3)}
+      ciop-log "INFO" "First check producttype: ${prodTypeName}"	
+      if [[ "$prodTypeName" != "L1G" ]]; then
+          prodTypeName=${productName:63:3}
+      fi
+      ciop-log "INFO" "Second check producttype: ${prodTypeName}"
       # Only L1G is supported
       if [[ "$prodTypeName" != "L1G" ]]; then 
           return $ERR_WRONGPRODTYPE
@@ -233,7 +238,7 @@ function check_product_type() {
   fi
 
   if [[ "${mission}" == "Kanopus-V" ]]; then
-        mss_test=$(echo "${productName}" | grep "MSS")
+        mss_test=$(echo "${retrievedProduct}" | grep -rl "MSS")
 	[[ "$mss_test" != "" ]] && prodTypeName="MSS"  || return $ERR_WRONGPRODTYPE
   fi
 
@@ -335,7 +340,8 @@ function mission_prod_retrieval(){
 	local mission=""
         local retrievedProduct=$1
         local prod_basename=$( basename "$retrievedProduct" )
-
+	
+	ciop-log "INFO" "Retrieved product basename is: ${prod_basename}"
         prod_basename_substr_3=${prod_basename:0:3}
         prod_basename_substr_4=${prod_basename:0:4}
         prod_basename_substr_5=${prod_basename:0:5}
@@ -352,6 +358,7 @@ function mission_prod_retrieval(){
         [ "${prod_basename_substr_3}" = "K5_" ] && mission="Kompsat-5"
         [ "${prod_basename_substr_3}" = "K3_" ] && mission="Kompsat-3"
 	[ "${prod_basename_substr_3}" = "LC8" ] && mission="Landsat-8"
+        [ "${prod_basename_substr_4}" = "U200" ] && mission="UK-DMC2"
         [ "${prod_basename_substr_4}" = "LC08" ] && mission="Landsat-8"
         [ "${prod_basename_substr_4}" = "LS08" ] && mission="Landsat-8"
         [ "${prod_basename_substr_4}" = "MSC_" ] && mission="Kompsat-2"
@@ -361,8 +368,8 @@ function mission_prod_retrieval(){
 	[ "${prod_basename_substr_5}" = "ORTHO" ] && mission="UK-DMC2"
         [ "${prod_basename_substr_10}" = "SENTINEL_2" ] && mission="Sentinel-2"
 
-        ukdmc2_test=$(echo "${prod_basename}" | grep "UK-DMC-2")
-        [ "${ukdmc2_test}" = "" ] || mission="UK-DMC-2"
+        ukdmc2_test=$(echo "${prod_basename}" | grep "UK-DMC-2\|UK-DMC2")
+        [ "${ukdmc2_test}" = "" ] || mission="UK-DMC2"
         if [[ "${prod_basename_substr_8}" == "RESURS_P" ]] || [[ "${prod_basename_substr_8}" == "RESURS-P" ]] || [[ "${prod_basename_substr_8}" == "Resurs-P" ]] || [[ "${prod_basename_substr_8}" == "Resurs_P" ]] ; then
             mission="Resurs-P"
         fi
@@ -389,7 +396,8 @@ function mission_prod_retrieval(){
         if [[ "${vrss1_test_1}" != "" ]] || [[ "${vrss1_test_2}" != "" ]]; then
 	    mission="VRSS1"
 	fi
-
+	kompsat3_test=${prod_basename:21:8}
+	[ "${kompsat3_test}" = "KOMPSAT3" ] && mission="Kompsat-3"
   	if [ "${mission}" != "" ] ; then
      	    echo ${mission}
   	else
@@ -2741,7 +2749,7 @@ function main() {
 	
 	# report activity in the log
         ciop-log "INFO" "Checking product type"
-        #get product type from product name
+	#get product type from product name
         prodType=$( check_product_type "${retrievedProduct}" "${mission}" )
         returnCode=$?
 	[ $returnCode -eq 0 ] || return $returnCode
