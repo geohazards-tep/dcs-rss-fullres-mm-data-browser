@@ -376,7 +376,12 @@ function mission_prod_retrieval(){
         if [[ "${prod_basename_substr_9}" == "KANOPUS_V" ]] || [[ "${prod_basename_substr_9}" == "KANOPUS-V" ]] || [[ "${prod_basename_substr_9}" == "Kanopus-V" ]] || [[ "${prod_basename_substr_9}" == "Kanopus_V" ]] ; then 
             mission="Kanopus-V"
         fi
-        alos2_test=$(echo "${prod_basename}" | grep "ALOS2")
+        kanopus_test=$(echo "${prod_basename}" | grep "_KV_")
+	[[ -z "${kanopus_test}" ]] && kanopus_test=$(ls "${retrievedProduct}" | grep "KV\|KANOPUS-V")
+	[ "${kanopus_test}" = "" ] || mission="Kanopus-V"
+	kanopus_test_2=$(ls "${retrievedProduct}" | grep "KANOPUS-V")
+	[ "${kanopus_test_2}" = "" ] || mission="Kanopus-V"
+	alos2_test=$(echo "${prod_basename}" | grep "ALOS2")
         [[ -z "${alos2_test}" ]] && alos2_test=$(ls "${retrievedProduct}" | grep "ALOS2")
         [ "${alos2_test}" = "" ] || mission="Alos-2"
 	spot6_test=$(echo "${prod_basename}" | grep "SPOT6")
