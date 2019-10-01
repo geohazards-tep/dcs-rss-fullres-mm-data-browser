@@ -163,7 +163,7 @@ function check_product_type() {
       prodTypeName=${productName:(-3)}
       ciop-log "INFO" "First check producttype: ${prodTypeName}"	
       if [[ "$prodTypeName" != "L1G" ]]; then
-          prodTypeName=${productName:64:3}
+          prodTypeName=${productName:63:3}
       fi
       ciop-log "INFO" "Second check producttype: ${prodTypeName}"
       # Only L1G is supported
